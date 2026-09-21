@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String     @id @default(uuid())
+  username  String     @unique
+  password  String
+  name      String
+  role      String     @default("USER") // USER or ADMIN
+  playlists Playlist[]
+  createdAt DateTime   @default(now())
+}
+
+model Song {
+  id        String         @id @default(uuid())
+  title     String
+  artist    String
+  album     String?
+  duration  Int            // in seconds
+  filePath  String         @unique
+  coverPath String?
+  playlists PlaylistSong[]
+  createdAt DateTime       @default(now())
+}
+
+model Playlist {
+  id        String         @id @default(uuid())
+  name      String
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  songs     PlaylistSong[]
+  createdAt DateTime       @default(now())
+}
+
+// Many-to-Many Join Table for Playlists and Songs
+model PlaylistSong {
+  playlistId String
+  songId     String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  song       Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+
+  @@id([playlistId, songId])
+}
