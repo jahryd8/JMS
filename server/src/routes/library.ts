@@ -15,14 +15,7 @@ const COVER_FILENAMES = ['cover.jpg', 'cover.png', 'folder.jpg', 'folder.png', '
 
 let libraryCache: any[] | null = null;
 
-// Helper to normalize picture format into proper MIME type
-const formatToMime = (format: string): string => {
-  if (format.includes('/')) return format; // Already a MIME type like "image/jpeg"
-  if (format === 'jpg') return 'image/jpeg';
-  return `image/${format}`;
-};
-
-// Check for loose cover image inside the track's folder
+// Look for folder-level artwork if no embedded artwork is found
 const findFolderCover = (songFilePath: string): string | undefined => {
   const dir = path.dirname(songFilePath);
   for (const fileName of COVER_FILENAMES) {
@@ -74,7 +67,7 @@ const getAudioFiles = (dir: string): string[] => {
   return results;
 };
 
-// Full library scan + metadata extraction
+// Full library scan + metadata & picture extraction
 const scanLibrary = async () => {
   console.log(`[Library] Starting scan on: ${MUSIC_DIR}`);
   const allFilePaths = getAudioFiles(MUSIC_DIR);
@@ -92,20 +85,21 @@ const scanLibrary = async () => {
       const fallbackTitle = path.basename(filePath, path.extname(filePath));
 
       try {
-        const metadata = await mm.parseFile(filePath, { duration: true });
+        // Full parse without options so pictures are extracted properly
+        const metadata = await mm.parseFile(filePath);
         const { common, format } = metadata;
 
         let coverPath: string | undefined = undefined;
 
-        // 1. Try embedded ID3 / FLAC picture
+        // 1. Embedded picture extraction (matching original library.ts logic)
         if (common.picture && common.picture.length > 0) {
           const pic = common.picture[0];
           const base64 = Buffer.from(pic.data).toString('base64');
-          const mime = formatToMime(pic.format);
-          coverPath = `data:${mime};base64,${base64}`;
+          const mimeFormat = pic.format.includes('/') ? pic.format : `image/${pic.format}`;
+          coverPath = `data:${mimeFormat};base64,${base64}`;
         }
 
-        // 2. Fallback to folder artwork (cover.jpg/folder.jpg)
+        // 2. Folder-level cover artwork fallback
         if (!coverPath) {
           coverPath = findFolderCover(filePath);
         }

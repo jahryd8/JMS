@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX, 
-  Search, Moon, Sun, Music, Heart, Disc, List, Settings, 
+  Search, Moon, Sun, Music, Heart, Disc, Settings, 
   LogOut, Radio, RefreshCw, Plus, Trash2, FolderPlus, X, ListPlus,
-  Lock, User, KeyRound, DownloadCloud, ChevronRight, ChevronUp, ChevronDown
+  Lock, User, KeyRound, DownloadCloud, ChevronDown, ChevronUp
 } from 'lucide-react';
 import type { Song } from './types/song';
 
@@ -18,6 +18,9 @@ const DEFAULT_PLAYLISTS: Playlist[] = [
   { id: 'pl-fav', name: 'Favourites', songIds: [], isSystem: true },
   { id: 'pl-vibe', name: 'Chill Vibes', songIds: [] }
 ];
+
+const FALLBACK_COVER = "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=400&q=80";
+const ITEMS_PER_BATCH = 20;
 
 export default function App() {
   // Auth State
@@ -36,6 +39,9 @@ export default function App() {
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   
+  // UX Batching / Pagination State
+  const [visibleCount, setVisibleCount] = useState<number>(ITEMS_PER_BATCH);
+
   // Audio Library State
   const [allSongs, setAllSongs] = useState<Song[]>([]);
   const [playbackQueue, setPlaybackQueue] = useState<Song[]>([]);
@@ -49,10 +55,6 @@ export default function App() {
   const [isRepeat, setIsRepeat] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // Pagination State
-  const [page, setPage] = useState<number>(1);
-  const [hasMore, setHasMore] = useState<boolean>(true);
-
   // Playlist State
   const [playlists, setPlaylists] = useState<Playlist[]>(() => {
     const saved = localStorage.getItem('jms_playlists');
@@ -64,6 +66,24 @@ export default function App() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentTrack = playbackQueue[currentTrackIndex] || allSongs[0];
+
+  // Helper to safely format artwork URLs with authentication when needed
+  const getCoverUrl = (song?: Song) => {
+    if (!song || !song.coverPath) {
+      return FALLBACK_COVER;
+    }
+    if (song.coverPath.startsWith('data:')) {
+      return song.coverPath;
+    }
+    return song.coverPath.includes('?') 
+      ? `${song.coverPath}&token=${authToken}`
+      : `${song.coverPath}?token=${authToken}`;
+  };
+
+  // Reset pagination batch size when tab or search query changes
+  useEffect(() => {
+    setVisibleCount(ITEMS_PER_BATCH);
+  }, [activeTab, activePlaylistId, searchQuery]);
 
   // Auth Handler
   const handleLogin = async (e: React.FormEvent) => {
@@ -108,27 +128,20 @@ export default function App() {
     localStorage.setItem('jms_playlists', JSON.stringify(playlists));
   }, [playlists]);
 
-  // Fetch library
-  const fetchLibrary = async (pageNum = 1, append = false) => {
+  // Fetch full library initially
+  const fetchLibrary = async () => {
     if (!authToken) return;
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:5000/api/library/songs?page=${pageNum}&limit=10`, {
+      const response = await fetch(`http://localhost:5000/api/library/songs?page=1&limit=1000`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       
       if (response.ok) {
         const data = await response.json();
         const incomingSongs: Song[] = data.songs || [];
-        
-        if (append) {
-          setAllSongs(prev => [...prev, ...incomingSongs]);
-          setPlaybackQueue(prev => [...prev, ...incomingSongs]);
-        } else {
-          setAllSongs(incomingSongs);
-          setPlaybackQueue(incomingSongs);
-        }
-        setHasMore(data.hasMore);
+        setAllSongs(incomingSongs);
+        setPlaybackQueue(incomingSongs);
       } else if (response.status === 401 || response.status === 403) {
         handleLogout();
       }
@@ -141,15 +154,9 @@ export default function App() {
 
   useEffect(() => {
     if (authToken) {
-      fetchLibrary(1, false);
+      fetchLibrary();
     }
   }, [authToken]);
-
-  const loadMoreSongs = () => {
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchLibrary(nextPage, true);
-  };
 
   useEffect(() => {
     if (audioRef.current) {
@@ -335,14 +342,14 @@ export default function App() {
     );
   };
 
-  const displayedSongs = getDisplayedSongs();
+  const fullFilteredSongs = getDisplayedSongs();
+  const visibleSongs = fullFilteredSongs.slice(0, visibleCount);
 
-  // Get real playable track count for playlists based on loaded library
   const getPlaylistRealCount = (pl: Playlist) => {
     return pl.songIds.filter(id => allSongs.some(s => s.id === id)).length;
   };
 
-  // LOGIN GATE SCREEN
+  // LOGIN SCREEN
   if (!authToken || !user) {
     return (
       <div className={`min-h-screen flex items-center justify-center p-6 ${
@@ -448,7 +455,7 @@ export default function App() {
 
         <div className="flex items-center gap-3">
           <button 
-            onClick={() => fetchLibrary(1, false)}
+            onClick={fetchLibrary}
             title="Refresh Library"
             className={`p-2 rounded-full transition-colors ${darkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-200 text-slate-600'}`}
           >
@@ -472,7 +479,6 @@ export default function App() {
               <span className="text-sm font-semibold hidden md:inline capitalize">{user.username}</span>
             </div>
 
-            {/* HEADER LOGOUT BUTTON */}
             <button
               onClick={handleLogout}
               title="Log Out"
@@ -559,7 +565,7 @@ export default function App() {
                       }`}
                     >
                       <div className="flex items-center gap-3 truncate">
-                        <List className="w-4 h-4 shrink-0" />
+                        <ListPlus className="w-4 h-4 shrink-0" />
                         <span className="truncate">{pl.name}</span>
                       </div>
                       <div className="flex items-center gap-1.5 opacity-80 group-hover:opacity-100">
@@ -583,7 +589,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* PINNED SIDEBAR FOOTER LOGOUT */}
           <div className={`p-4 border-t ${darkMode ? 'border-slate-800/80' : 'border-slate-200'}`}>
             <button 
               onClick={handleLogout}
@@ -633,18 +638,18 @@ export default function App() {
                 <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${
                   darkMode ? 'bg-slate-800 text-slate-400 border-slate-700' : 'bg-slate-100 text-slate-600 border-slate-300'
                 }`}>
-                  {displayedSongs.length} tracks loaded
+                  Showing {visibleSongs.length} of {fullFilteredSongs.length} tracks
                 </span>
               </div>
 
-              {displayedSongs.length === 0 ? (
+              {fullFilteredSongs.length === 0 ? (
                 <div className="py-12 text-center text-slate-400">
                   <Music className="w-12 h-12 mx-auto mb-3 opacity-30" />
                   <p>No audio tracks found in this view.</p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {displayedSongs.map((song, idx) => {
+                  {visibleSongs.map((song, idx) => {
                     const isCurrent = currentTrack?.id === song.id;
                     const isFav = isFavorite(song.id);
                     const isDropdownOpen = openDropdownSongId === song.id;
@@ -652,7 +657,7 @@ export default function App() {
                     return (
                       <div
                         key={song.id}
-                        onClick={() => handlePlayTrack(song, displayedSongs)}
+                        onClick={() => handlePlayTrack(song, fullFilteredSongs)}
                         className={`group relative flex items-center justify-between p-3.5 rounded-xl transition-all cursor-pointer border ${
                           isCurrent
                             ? (darkMode ? 'bg-blue-600/20 border-blue-500/40' : 'bg-blue-50 border-blue-300')
@@ -661,8 +666,12 @@ export default function App() {
                       >
                         <div className="flex items-center gap-4">
                           <img 
-                            src={song.coverPath || "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=400&q=80"} 
+                            src={getCoverUrl(song)} 
                             alt={song.title} 
+                            onError={(e) => {
+                              // Image load fallback if url fails or returns 404
+                              (e.target as HTMLImageElement).src = FALLBACK_COVER;
+                            }}
                             className="w-12 h-12 rounded-lg object-cover bg-slate-800 shadow-sm shrink-0" 
                           />
                           <div>
@@ -692,7 +701,7 @@ export default function App() {
                               </button>
                               <button
                                 onClick={(e) => moveTrackInPlaylist(activePlaylistId, song.id, 'down', e)}
-                                disabled={idx === displayedSongs.length - 1}
+                                disabled={idx === visibleSongs.length - 1}
                                 className="p-1 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400"
                                 title="Move Down"
                               >
@@ -772,18 +781,16 @@ export default function App() {
                 </div>
               )}
 
-              {/* PAGINATION BUTTON */}
-              {hasMore && activeTab === 'Discover' && !activePlaylistId && (
+              {/* UX BATCHING: LOAD MORE BUTTON */}
+              {visibleCount < fullFilteredSongs.length && (
                 <div className="mt-6 text-center">
                   <button
-                    onClick={loadMoreSongs}
-                    disabled={isLoading}
+                    onClick={() => setVisibleCount(prev => prev + ITEMS_PER_BATCH)}
                     className={`px-6 py-2.5 rounded-xl font-semibold text-xs transition shadow-md inline-flex items-center gap-2 ${
                       darkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-slate-200 hover:bg-slate-300 text-slate-800'
                     }`}
                   >
-                    {isLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                    Load More Tracks
+                    Load More Tracks ({fullFilteredSongs.length - visibleCount} remaining)
                   </button>
                 </div>
               )}
@@ -846,8 +853,11 @@ export default function App() {
         }`}>
           <div className="flex items-center gap-4 w-1/4 min-w-[200px]">
             <img 
-              src={currentTrack.coverPath || "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=400&q=80"} 
+              src={getCoverUrl(currentTrack)} 
               alt={currentTrack.title}
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = FALLBACK_COVER;
+              }}
               className="w-12 h-12 rounded-xl object-cover bg-slate-800 shadow shrink-0" 
             />
             <div className="truncate">
