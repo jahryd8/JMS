@@ -1,90 +1,211 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import * as parseMusic from 'music-metadata';
-import { PrismaClient } from '@prisma/client';
+import * as mm from 'music-metadata';
 
 const router = Router();
-const prisma = new PrismaClient();
+const MUSIC_DIR = process.env.MUSIC_DIR || '/run/media/jahry8/JAH LINUX STORE/JaHMuSiC';
 
-// Supported audio extensions
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.m4a', '.wav', '.ogg']);
+const SUPPORTED_EXTENSIONS = new Set([
+  '.mp3', '.flac', '.m4a', '.wav', '.ogg', 
+  '.aac', '.opus', '.wma', '.aiff', '.alac'
+]);
 
-function getAudioFiles(dirPath: string, fileList: string[] = []): string[] {
-  if (!fs.existsSync(dirPath)) return fileList;
-  const files = fs.readdirSync(dirPath);
+const COVER_FILENAMES = ['cover.jpg', 'cover.png', 'folder.jpg', 'folder.png', 'album.jpg', 'art.jpg'];
 
-  for (const file of files) {
-    const fullPath = path.join(dirPath, file);
-    try {
-      const stat = fs.statSync(fullPath);
-      if (stat.isDirectory()) {
-        getAudioFiles(fullPath, fileList);
-      } else if (AUDIO_EXTENSIONS.has(path.extname(file).toLowerCase())) {
-        fileList.push(fullPath);
-      }
-    } catch {
-      // Skip unreadable files or broken symlinks
+let libraryCache: any[] | null = null;
+
+// Helper to normalize picture format into proper MIME type
+const formatToMime = (format: string): string => {
+  if (format.includes('/')) return format; // Already a MIME type like "image/jpeg"
+  if (format === 'jpg') return 'image/jpeg';
+  return `image/${format}`;
+};
+
+// Check for loose cover image inside the track's folder
+const findFolderCover = (songFilePath: string): string | undefined => {
+  const dir = path.dirname(songFilePath);
+  for (const fileName of COVER_FILENAMES) {
+    const candidatePath = path.join(dir, fileName);
+    if (fs.existsSync(candidatePath)) {
+      const relativeFolderCover = path.relative(MUSIC_DIR, candidatePath);
+      const encodedPath = relativeFolderCover
+        .split(path.sep)
+        .map((seg) => encodeURIComponent(seg))
+        .join('/');
+      return `http://localhost:5000/api/library/cover/${encodedPath}`;
     }
   }
-  return fileList;
-}
+  return undefined;
+};
 
-router.post('/scan', async (req: Request, res: Response) => {
-  const { directoryPath } = req.body;
+// Safe recursive file collector
+const getAudioFiles = (dir: string): string[] => {
+  let results: string[] = [];
 
-  if (!directoryPath || typeof directoryPath !== 'string') {
-    res.status(400).json({ error: 'Valid directoryPath required' });
-    return;
+  if (!fs.existsSync(dir)) {
+    console.warn(`[Library] Path missing or unmounted: ${dir}`);
+    return results;
   }
 
   try {
-    const files = getAudioFiles(directoryPath);
-    let addedCount = 0;
+    const list = fs.readdirSync(dir);
+    for (const file of list) {
+      if (file.startsWith('.')) continue; // Skip hidden/system files
 
-    for (const filePath of files) {
-      // Check if song already exists in DB
-      const existing = await prisma.song.findUnique({ where: { filePath } });
-      if (existing) continue;
-
+      const filePath = path.join(dir, file);
       try {
-        const metadata = await parseMusic.parseFile(filePath);
-        const title = metadata.common.title || path.basename(filePath, path.extname(filePath));
-        const artist = metadata.common.artist || 'Unknown Artist';
-        const album = metadata.common.album || 'Unknown Album';
-        const duration = Math.round(metadata.format.duration || 0);
-
-        await prisma.song.create({
-          data: {
-            title,
-            artist,
-            album,
-            duration,
-            filePath,
-          },
-        });
-        addedCount++;
+        const stat = fs.statSync(filePath);
+        if (stat && stat.isDirectory()) {
+          results = results.concat(getAudioFiles(filePath));
+        } else {
+          const ext = path.extname(file).toLowerCase();
+          if (SUPPORTED_EXTENSIONS.has(ext)) {
+            results.push(filePath);
+          }
+        }
       } catch (e) {
-        console.error(`Failed to parse metadata for ${filePath}:`, e);
+        // Safe catch for locked or unreadable files
       }
     }
-
-    res.json({ message: 'Scan complete', totalFound: files.length, newAdded: addedCount });
   } catch (err) {
-    console.error('Library scan error:', err);
-    res.status(500).json({ error: 'Failed to scan library' });
+    console.error(`[Library] Error reading folder ${dir}:`, err);
+  }
+  return results;
+};
+
+// Full library scan + metadata extraction
+const scanLibrary = async () => {
+  console.log(`[Library] Starting scan on: ${MUSIC_DIR}`);
+  const allFilePaths = getAudioFiles(MUSIC_DIR);
+  console.log(`[Library] Found ${allFilePaths.length} audio candidates.`);
+
+  const songs = await Promise.all(
+    allFilePaths.map(async (filePath, idx) => {
+      const relativePath = path.relative(MUSIC_DIR, filePath);
+      const encodedRelativePath = relativePath
+        .split(path.sep)
+        .map((segment) => encodeURIComponent(segment))
+        .join('/');
+
+      const baseId = Buffer.from(relativePath).toString('base64url');
+      const fallbackTitle = path.basename(filePath, path.extname(filePath));
+
+      try {
+        const metadata = await mm.parseFile(filePath, { duration: true });
+        const { common, format } = metadata;
+
+        let coverPath: string | undefined = undefined;
+
+        // 1. Try embedded ID3 / FLAC picture
+        if (common.picture && common.picture.length > 0) {
+          const pic = common.picture[0];
+          const base64 = Buffer.from(pic.data).toString('base64');
+          const mime = formatToMime(pic.format);
+          coverPath = `data:${mime};base64,${base64}`;
+        }
+
+        // 2. Fallback to folder artwork (cover.jpg/folder.jpg)
+        if (!coverPath) {
+          coverPath = findFolderCover(filePath);
+        }
+
+        return {
+          id: baseId,
+          index: idx,
+          title: common.title || fallbackTitle,
+          artist: common.artist || 'Unknown Artist',
+          album: common.album || 'Unknown Album',
+          duration: Math.round(format.duration || 0),
+          coverPath,
+          audioUrl: `http://localhost:5000/api/stream/${encodedRelativePath}`
+        };
+      } catch (err) {
+        console.warn(`[Library] Metadata failed for "${relativePath}", loading fallback.`);
+        return {
+          id: baseId,
+          index: idx,
+          title: fallbackTitle,
+          artist: 'Unknown Artist',
+          album: 'Unknown Album',
+          duration: 0,
+          coverPath: findFolderCover(filePath),
+          audioUrl: `http://localhost:5000/api/stream/${encodedRelativePath}`
+        };
+      }
+    })
+  );
+
+  libraryCache = songs;
+  return songs;
+};
+
+// GET /api/library/songs
+router.get('/songs', async (req: Request, res: Response) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit as string) || 10);
+    const searchQuery = ((req.query.search as string) || '').toLowerCase().trim();
+
+    if (!libraryCache) {
+      await scanLibrary();
+    }
+
+    let allSongs = libraryCache || [];
+
+    if (searchQuery) {
+      allSongs = allSongs.filter(
+        (song) =>
+          song.title.toLowerCase().includes(searchQuery) ||
+          song.artist.toLowerCase().includes(searchQuery) ||
+          song.album.toLowerCase().includes(searchQuery)
+      );
+    }
+
+    const startIndex = (page - 1) * limit;
+    const paginatedSongs = allSongs.slice(startIndex, startIndex + limit);
+
+    res.json({
+      page,
+      limit,
+      totalTracks: allSongs.length,
+      hasMore: startIndex + limit < allSongs.length,
+      songs: paginatedSongs
+    });
+  } catch (error) {
+    console.error('[Library] Scan error:', error);
+    res.status(500).json({ error: 'Failed to fetch library' });
   }
 });
 
-// Fetch all tracks for front-end Discover page
-router.get('/songs', async (_req: Request, res: Response) => {
+// GET /api/library/cover/* (Serves folder-level cover images)
+router.get('/cover/*splat', (req: Request, res: Response) => {
+  const rawSplat = Array.isArray(req.params.splat)
+    ? req.params.splat.join('/')
+    : req.params.splat || '';
+
+  const relativePath = decodeURIComponent(rawSplat);
+  const filePath = path.resolve(MUSIC_DIR, relativePath);
+
+  if (!filePath.startsWith(path.resolve(MUSIC_DIR)) || !fs.existsSync(filePath)) {
+    return res.status(404).send('Cover not found');
+  }
+
+  res.sendFile(filePath);
+});
+
+// POST /api/library/refresh (Manual Rescan)
+router.post('/refresh', async (req: Request, res: Response) => {
   try {
-    const songs = await prisma.song.findMany({
-      orderBy: { createdAt: 'desc' },
+    console.log('[Library] Manual rescan triggered.');
+    const refreshedSongs = await scanLibrary();
+    res.json({ 
+      message: 'Library refreshed successfully', 
+      totalTracks: refreshedSongs.length 
     });
-    res.json(songs);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch songs' });
+  } catch (error) {
+    console.error('[Library] Rescan failed:', error);
+    res.status(500).json({ error: 'Failed to refresh library' });
   }
 });
 
