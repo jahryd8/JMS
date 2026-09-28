@@ -12,6 +12,13 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'jms_super_secret_key_2026';
 
+// ============================================================
+// Trust the first proxy hop (Render, Railway, Fly, etc.)
+// Required so express-rate-limit can read the real client IP
+// from X-Forwarded-For instead of rejecting every request.
+// ============================================================
+app.set('trust proxy', 1);
+
 app.use(cors({
   origin: [
     'http://localhost:5173',
@@ -81,6 +88,8 @@ const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   message: { error: 'Too many login attempts, try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 app.post('/api/auth/login', loginLimiter, (req, res) => {
@@ -93,12 +102,10 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   const normalizedUser = String(username).toLowerCase().trim();
   const validPassword = ALLOWED_USERS[normalizedUser];
 
-  // Reject unknown users OR users with a blank password configured
   if (!validPassword || validPassword.length === 0) {
     return res.status(401).json({ error: 'Invalid credentials or unauthorized user.' });
   }
 
-  // Constant-time-ish string compare (avoids trivial timing leaks)
   const matches =
     validPassword.length === password.length &&
     [...validPassword].every((c, i) => c === password[i]);
