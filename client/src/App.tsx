@@ -37,7 +37,7 @@ const GENERIC_COVERS = [
 ];
 
 const ITEMS_PER_BATCH = 20;
-const API_BASE = 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 const DB_NAME = 'jms_downloads';
 const DB_STORE = 'tracks';
 
@@ -108,6 +108,8 @@ export default function App() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showWakingMessage, setShowWakingMessage] = useState(false);
 
   // ---------- UI State ----------
   const [darkMode, setDarkMode] = useState(true);
@@ -209,23 +211,53 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
-    try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: loginUsername, password: loginPassword })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setAuthToken(data.token);
-        setUser(data.user);
-        localStorage.setItem('jms_token', data.token);
-        localStorage.setItem('jms_user', JSON.stringify(data.user));
-      } else {
-        setLoginError(data.error || 'Login failed.');
+    setIsLoggingIn(true);
+    setShowWakingMessage(false);
+
+    // If the request takes more than 3s, show the "waking server" hint
+    // (Render free tier spins down after 15min idle and takes ~30-50s to wake)
+    const wakingTimer = window.setTimeout(() => {
+      setShowWakingMessage(true);
+    }, 3000);
+
+    const attemptLogin = async (): Promise<{ ok: boolean; data?: any; networkError?: boolean }> => {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+        });
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, data };
+      } catch {
+        return { ok: false, networkError: true };
       }
-    } catch {
-      setLoginError('Cannot connect to JMS backend server.');
+    };
+
+    try {
+      let result = await attemptLogin();
+
+      // If it was a network error (server cold-starting), retry once after 5s
+      if (result.networkError) {
+        console.log('[Login] Network error — retrying in 5s (server may be waking)...');
+        await new Promise(r => setTimeout(r, 5000));
+        result = await attemptLogin();
+      }
+
+      if (result.ok && result.data) {
+        setAuthToken(result.data.token);
+        setUser(result.data.user);
+        localStorage.setItem('jms_token', result.data.token);
+        localStorage.setItem('jms_user', JSON.stringify(result.data.user));
+      } else if (result.networkError) {
+        setLoginError('Server is taking too long to respond. Please try again in a moment.');
+      } else {
+        setLoginError(result.data?.error || 'Login failed.');
+      }
+    } finally {
+      window.clearTimeout(wakingTimer);
+      setIsLoggingIn(false);
+      setShowWakingMessage(false);
     }
   };
 
@@ -248,10 +280,32 @@ export default function App() {
   const fetchLibrary = async () => {
     if (!authToken) return;
     setIsLoading(true);
+
+    const tryFetch = async (): Promise<Response | null> => {
+      try {
+        return await fetch(`${API_BASE}/api/library/songs?page=1&limit=1000`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+      } catch {
+        return null;
+      }
+    };
+
     try {
-      const response = await fetch(`${API_BASE}/api/library/songs?page=1&limit=1000`, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
+      let response = await tryFetch();
+
+      // Cold-start retry: if the first call fails at the network layer, wait and try again
+      if (!response) {
+        console.log('[Library] Network error — retrying in 5s (server may be waking)...');
+        await new Promise(r => setTimeout(r, 5000));
+        response = await tryFetch();
+      }
+
+      if (!response) {
+        console.error('[Library] Failed after retry');
+        return;
+      }
+
       if (response.ok) {
         const data = await response.json();
         console.log('[Library] Received', data.songs?.length, 'songs');
@@ -263,8 +317,6 @@ export default function App() {
       } else {
         console.error('[Library] Failed:', response.status, await response.text());
       }
-    } catch (err) {
-      console.error('Failed to load library:', err);
     } finally {
       setIsLoading(false);
     }
@@ -620,6 +672,8 @@ export default function App() {
                       : 'bg-slate-50 border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
                   }`}
                   placeholder="Enter username"
+                  disabled={isLoggingIn}
+                  autoComplete="username"
                   required
                 />
               </div>
@@ -639,6 +693,8 @@ export default function App() {
                       : 'bg-slate-50 border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
                   }`}
                   placeholder="••••••••"
+                  disabled={isLoggingIn}
+                  autoComplete="current-password"
                   required
                 />
               </div>
@@ -646,14 +702,30 @@ export default function App() {
 
             <button
               type="submit"
-              className={`w-full py-2.5 rounded-xl text-white text-sm font-semibold transition shadow-lg ${
+              disabled={isLoggingIn}
+              className={`w-full py-2.5 rounded-xl text-white text-sm font-semibold transition shadow-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-wait ${
                 darkMode
                   ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
                   : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-indigo-500/30'
               }`}
             >
-              Sign In to JMS
+              {isLoggingIn ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                'Sign In to JMS'
+              )}
             </button>
+
+            {showWakingMessage && (
+              <p className={`text-[11px] text-center mt-2 animate-pulse ${
+                darkMode ? 'text-amber-400' : 'text-amber-600'
+              }`}>
+                Waking up the server — this can take up to 50 seconds on the first login...
+              </p>
+            )}
           </form>
         </div>
       </div>

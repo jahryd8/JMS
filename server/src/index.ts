@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import streamRouter from './routes/stream';
 import libraryRouter from './routes/library';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
@@ -11,13 +12,15 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'jms_super_secret_key_2026';
 
-app.use(
-  cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'https://jms-ten-theta.vercel.app',   // no trailing slash
+    /\.vercel\.app$/,                      // preview deploys
+  ],
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(express.json());
 
 // ============================================================
@@ -74,7 +77,13 @@ export const authenticateToken = (
 // ============================================================
 // Auth Routes
 // ============================================================
-app.post('/api/auth/login', (req, res) => {
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many login attempts, try again later.' },
+});
+
+app.post('/api/auth/login', loginLimiter, (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
