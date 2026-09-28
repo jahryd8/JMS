@@ -18,14 +18,15 @@ model User {
 }
 
 model Song {
-  id        String         @id @default(uuid())
+  id        String   @id @default(cuid())
   title     String
   artist    String
   album     String?
-  duration  Int
-  filePath  String         @unique
-  coverPath String?
-  createdAt DateTime       @default(now())
+  duration  Int      @default(0)
+  fileKey   String   @unique
+  coverKey  String?
+  createdAt DateTime @default(now())
+
   playlists PlaylistSong[]
 }
 

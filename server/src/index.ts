@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import streamRouter from './routes/stream';
 import libraryRouter from './routes/library';
@@ -10,36 +9,54 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MUSIC_DIR = process.env.MUSIC_DIR || '/run/media/jahry8/JAH LINUX STORE/JaHMuSiC';
 const JWT_SECRET = process.env.JWT_SECRET || 'jms_super_secret_key_2026';
 
-app.use(cors({
-  origin: '*', // Adjust or specify front-end origin in production
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use(
+  cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(express.json());
 
-// Check External Storage Directory
-if (!fs.existsSync(MUSIC_DIR)) {
-  console.warn(`\n⚠️  [WARNING] Music directory not found or unmounted at: ${MUSIC_DIR}`);
-} else {
-  console.log(`\n📂 [STORAGE] Connected to music directory: ${MUSIC_DIR}`);
-}
+// ============================================================
+// Pre-authorized accounts (invited users only)
+// ============================================================
+const ALLOWED_USERS: { [key: string]: string } = {
+  jahry8: process.env.AUTH_PASS_JAHRY8 || '',
 
-// Pre-authorized accounts (Users invited to private server)
-const ALLOWED_USERS: Record<string, string> = {
-  jahry8: process.env.AUTH_PASS_JAHRY8 || 'admin123',
-  family: process.env.AUTH_PASS_FAMILY || 'family123',
-  friends: process.env.AUTH_PASS_FRIENDS || 'friends123'
+  domiii: process.env.AUTH_PASS_DOMIII || '',
+  natalia: process.env.AUTH_PASS_NATALIA || '',
+  becks: process.env.AUTH_PASS_BECKS || '',
+  kav: process.env.AUTH_PASS_KAV || '',
+  brianna: process.env.AUTH_PASS_BRIANNA || '',
+  mom: process.env.AUTH_PASS_MOM || '',
+  ari: process.env.AUTH_PASS_ARI || '',
+  ellie: process.env.AUTH_PASS_ELLIE || '',
+
+  user1: process.env.AUTH_PASS_USER1 || '',
+  user2: process.env.AUTH_PASS_USER2 || '',
+  user3: process.env.AUTH_PASS_USER3 || '',
+  user4: process.env.AUTH_PASS_USER4 || '',
+  user5: process.env.AUTH_PASS_USER5 || '',
+  user6: process.env.AUTH_PASS_USER6 || '',
+  user7: process.env.AUTH_PASS_USER7 || '',
+  user8: process.env.AUTH_PASS_USER8 || '',
+  user9: process.env.AUTH_PASS_USER9 || '',
+  user10: process.env.AUTH_PASS_USER10 || '',
 };
 
-// Authentication Middleware
-export const authenticateToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+// Only these users get the 'admin' role
+const ADMIN_USERS = new Set(['jahry8']);
+
+export const authenticateToken = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-
-  // Allow streaming query tokens for HTML5 <audio> tag src requests
   const queryToken = req.query.token as string;
   const activeToken = token || queryToken;
 
@@ -54,7 +71,9 @@ export const authenticateToken = (req: express.Request, res: express.Response, n
   });
 };
 
+// ============================================================
 // Auth Routes
+// ============================================================
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
 
@@ -62,25 +81,34 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Username and password are required.' });
   }
 
-  const normalizedUser = username.toLowerCase();
+  const normalizedUser = String(username).toLowerCase().trim();
   const validPassword = ALLOWED_USERS[normalizedUser];
 
-  if (!validPassword || validPassword !== password) {
+  // Reject unknown users OR users with a blank password configured
+  if (!validPassword || validPassword.length === 0) {
     return res.status(401).json({ error: 'Invalid credentials or unauthorized user.' });
   }
 
+  // Constant-time-ish string compare (avoids trivial timing leaks)
+  const matches =
+    validPassword.length === password.length &&
+    [...validPassword].every((c, i) => c === password[i]);
+
+  if (!matches) {
+    return res.status(401).json({ error: 'Invalid credentials or unauthorized user.' });
+  }
+
+  const role = ADMIN_USERS.has(normalizedUser) ? 'admin' : 'user';
+
   const token = jwt.sign(
-    { username: normalizedUser, role: normalizedUser === 'jahry8' ? 'admin' : 'user' },
+    { username: normalizedUser, role },
     JWT_SECRET,
     { expiresIn: '30d' }
   );
 
   res.json({
     token,
-    user: {
-      username: normalizedUser,
-      role: normalizedUser === 'jahry8' ? 'admin' : 'user'
-    }
+    user: { username: normalizedUser, role },
   });
 });
 
@@ -88,16 +116,19 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
   res.json({ user: (req as any).user });
 });
 
+// ============================================================
 // Protected API Routes
+// ============================================================
 app.use('/api/stream', authenticateToken, streamRouter);
 app.use('/api/library', authenticateToken, libraryRouter);
 
+// ============================================================
 // Health Check
+// ============================================================
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    server: 'JMS Backend Online',
-    storageMounted: fs.existsSync(MUSIC_DIR) 
+  res.json({
+    status: 'ok',
+    server: 'JMS Backend Online (Cloudflare R2)',
   });
 });
 
