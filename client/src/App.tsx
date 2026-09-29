@@ -80,6 +80,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 const DB_NAME = 'jms_downloads';
 const DB_STORE = 'tracks';
 const THEME_KEY = 'jms_theme';
+const LAST_PLAYED_KEY = 'jms_last_played';
 
 function toAbsoluteUrl(url: string | undefined): string | undefined {
   if (!url) return url;
@@ -150,7 +151,7 @@ export default function App() {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved === 'light') return false;
     if (saved === 'dark') return true;
-    return true; // default dark
+    return true;
   });
   const [activeTab, setActiveTab] = useState('Discover');
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
@@ -172,6 +173,7 @@ export default function App() {
   const [isShuffle, setIsShuffle] = useState(false);
   const [isRepeat, setIsRepeat] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasRestoredLastTrack, setHasRestoredLastTrack] = useState(false);
 
   // ---------- Playlists ----------
   const [playlists, setPlaylists] = useState<Playlist[]>(() => {
@@ -195,14 +197,14 @@ export default function App() {
     [downloads]
   );
 
-  // Persist theme
+  // Persist theme + update meta theme-color
   useEffect(() => {
     localStorage.setItem(THEME_KEY, darkMode ? 'dark' : 'light');
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', darkMode ? '#0f172a' : '#fafaf9');
   }, [darkMode]);
 
-  // Load downloads
+  // Load downloads from IndexedDB
   useEffect(() => {
     getAllDownloads().then(setDownloads).catch(err => console.error('DB load failed:', err));
   }, []);
@@ -332,7 +334,10 @@ export default function App() {
         const data = await response.json();
         const incomingSongs: Song[] = data.songs || [];
         setAllSongs(incomingSongs);
-        setPlaybackQueue(incomingSongs);
+        // Don't overwrite the queue if we've restored a last-played session
+        if (!hasRestoredLastTrack) {
+          setPlaybackQueue(incomingSongs);
+        }
       } else if (response.status === 401 || response.status === 403) {
         handleLogout();
       }
@@ -350,26 +355,102 @@ export default function App() {
     if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
 
-  // ---------- Track loading (offline-aware) ----------
+  // ---------- Restore last-played snapshot once library loads ----------
+  useEffect(() => {
+    if (hasRestoredLastTrack) return;
+    if (allSongs.length === 0) return;
+
+    const raw = localStorage.getItem(LAST_PLAYED_KEY);
+    if (!raw) {
+      setHasRestoredLastTrack(true);
+      return;
+    }
+
+    try {
+      const snap = JSON.parse(raw) as {
+        trackId: string;
+        time: number;
+        queue: string[];
+        index: number;
+      };
+
+      const track = allSongs.find(s => s.id === snap.trackId);
+      if (!track) {
+        setHasRestoredLastTrack(true);
+        return;
+      }
+
+      // Rebuild the queue from saved ids; drop ids that no longer exist
+      const rebuiltQueue = (snap.queue || [])
+        .map(id => allSongs.find(s => s.id === id))
+        .filter((s): s is Song => !!s);
+
+      const finalQueue = rebuiltQueue.length > 0 ? rebuiltQueue : [track];
+      const finalIndex = Math.max(0, finalQueue.findIndex(s => s.id === track.id));
+
+      setPlaybackQueue(finalQueue);
+      setCurrentTrackIndex(finalIndex);
+      setCurrentTime(snap.time || 0);
+      // Deliberately NOT calling setIsPlaying(true) — user resumes manually
+    } catch {
+      // ignore corrupt state
+    }
+
+    setHasRestoredLastTrack(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allSongs.length, hasRestoredLastTrack]);
+
+  // ---------- Persist last-played snapshot ----------
+  useEffect(() => {
+    if (!currentTrack) return;
+    const snapshot = {
+      trackId: currentTrack.id,
+      time: currentTime,
+      queue: playbackQueue.map(s => s.id),
+      index: currentTrackIndex,
+      savedAt: Date.now(),
+    };
+    try {
+      localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(snapshot));
+    } catch {
+      // quota exceeded — ignore
+    }
+  }, [currentTrack?.id, currentTrackIndex, playbackQueue, currentTime]);
+
+  // ---------- Track loading (offline-aware, restores saved position) ----------
   useEffect(() => {
     if (!audioRef.current || !currentTrack) return;
     const localDownload = downloads.find(d => d.id === currentTrack.id);
     let url: string;
+
     if (localDownload) {
       url = URL.createObjectURL(localDownload.blob);
     } else if (!isOnline) {
-      // Offline and no local copy — don't try the network
       console.warn('[Player] Offline and track not downloaded:', currentTrack.title);
       return;
     } else {
       url = getAudioUrl(currentTrack);
     }
 
-    audioRef.current.src = url;
-    audioRef.current.load();
-    if (isPlaying) audioRef.current.play().catch(e => console.error('Playback error:', e));
+    const audio = audioRef.current;
+    const seekTime = currentTime;
 
-    return () => { if (localDownload) URL.revokeObjectURL(url); };
+    const restorePosition = () => {
+      if (seekTime > 0 && Math.abs(audio.currentTime - seekTime) > 1) {
+        try { audio.currentTime = seekTime; } catch { /* ignore */ }
+      }
+      audio.removeEventListener('loadedmetadata', restorePosition);
+    };
+    audio.addEventListener('loadedmetadata', restorePosition);
+
+    audio.src = url;
+    audio.load();
+    if (isPlaying) audio.play().catch(e => console.error('Playback error:', e));
+
+    return () => {
+      audio.removeEventListener('loadedmetadata', restorePosition);
+      if (localDownload) URL.revokeObjectURL(url);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrackIndex, currentTrack?.id, authToken, downloads, isOnline]);
 
@@ -378,6 +459,7 @@ export default function App() {
     setPlaybackQueue(targetList);
     const targetIdx = targetList.findIndex(s => s.id === track.id);
     setCurrentTrackIndex(targetIdx !== -1 ? targetIdx : 0);
+    setCurrentTime(0);
     setIsPlaying(true);
   };
 
@@ -400,6 +482,7 @@ export default function App() {
     }
     if (isShuffle) setCurrentTrackIndex(Math.floor(Math.random() * playbackQueue.length));
     else setCurrentTrackIndex(prev => (prev + 1) % playbackQueue.length);
+    setCurrentTime(0);
     setIsPlaying(true);
   }, [isRepeat, isShuffle, playbackQueue.length]);
 
@@ -552,7 +635,6 @@ export default function App() {
     const track = allSongs[randomIdx];
     const shuffled = [...allSongs].sort(() => Math.random() - 0.5);
     handlePlayTrack(track, shuffled);
-    // Do NOT open the full player — user can tap the mini-player
   };
 
   const getDisplayedSongs = (): Song[] => {
@@ -788,11 +870,10 @@ export default function App() {
   );
 
   // =========================================================
-  // DISCOVER GRID — bigger, more spectacle, no search
+  // DISCOVER GRID
   // =========================================================
   const renderDiscover = () => (
     <div className="animate-[fadeIn_0.4s_ease-out]">
-      {/* Big hero */}
       <div className={`relative p-8 sm:p-12 rounded-3xl mb-6 sm:mb-8 border overflow-hidden bg-gradient-to-br ${theme.heroGrad} ${theme.heroBorder}`}>
         <div className="absolute -top-24 -right-24 w-64 h-64 rounded-full bg-blue-500/10 blur-3xl" />
         <div className="absolute -bottom-24 -left-24 w-64 h-64 rounded-full bg-purple-500/10 blur-3xl" />
@@ -842,7 +923,7 @@ export default function App() {
   );
 
   // =========================================================
-  // TRACK ROW — no auto-open of full player
+  // TRACK ROW
   // =========================================================
   const renderTrackRow = (song: Song, idx: number) => {
     const isCurrent = currentTrack?.id === song.id;
@@ -852,18 +933,24 @@ export default function App() {
     const progress = downloadProgress[song.id];
     const rowProgress = isCurrent ? progressPct : 0;
 
+    // Show download/remove button on mobile ONLY in the Downloads tab
+    const showDownloadBtnAlways = activeTab === 'Downloads';
+
     return (
       <div
         key={song.id}
-        onClick={() => handlePlayTrack(song, fullFilteredSongs)}  // ← no setIsMobilePlayerOpen
-        className={`group relative flex items-center justify-between gap-2 p-2 sm:p-3.5 rounded-xl transition-all cursor-pointer border overflow-hidden ${
+        onClick={() => handlePlayTrack(song, fullFilteredSongs)}
+        className={`group relative flex items-center justify-between gap-2 p-2 sm:p-3.5 rounded-xl transition-all cursor-pointer border ${
           isCurrent
             ? (darkMode ? 'bg-blue-600/20 border-blue-500/40' : 'bg-indigo-100 border-indigo-300')
             : (darkMode ? 'hover:bg-slate-800/60 border-transparent' : 'hover:bg-white border-transparent hover:border-indigo-100')
         }`}
       >
         {isCurrent && rowProgress > 0 && (
-          <div className="absolute left-0 bottom-0 h-0.5 bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-300" style={{ width: `${rowProgress}%` }} />
+          <div
+            className="absolute left-0 bottom-0 h-0.5 bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-300 rounded-bl-xl"
+            style={{ width: `${rowProgress}%` }}
+          />
         )}
 
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -920,7 +1007,9 @@ export default function App() {
           <button
             onClick={(e) => downloaded ? removeDownloaded(song.id, e) : downloadTrack(song, e)}
             disabled={progress !== undefined}
-            className={`p-1.5 rounded-full transition hidden sm:inline-flex ${
+            className={`p-1.5 rounded-full transition ${
+              showDownloadBtnAlways ? 'inline-flex' : 'hidden sm:inline-flex'
+            } ${
               downloaded ? 'text-emerald-500 hover:text-rose-500'
                 : progress !== undefined ? 'text-blue-500 cursor-wait'
                 : 'text-slate-400 hover:text-blue-500'
@@ -947,7 +1036,7 @@ export default function App() {
             </button>
             {isDropdownOpen && (
               <div onClick={(e) => e.stopPropagation()}
-                className={`absolute right-0 top-full mt-2 w-48 rounded-xl shadow-xl border z-50 p-2 ${
+                className={`absolute right-0 top-full mt-2 w-48 rounded-xl shadow-2xl border z-[70] p-2 ${
                   darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
                 }`}>
                 <p className={`px-2 py-1 text-[10px] font-bold tracking-widest uppercase ${theme.textMuted}`}>
@@ -1035,7 +1124,7 @@ export default function App() {
   );
 
   // =========================================================
-  // FULLSCREEN MOBILE PLAYER — scrollable, with working menu
+  // FULLSCREEN MOBILE PLAYER
   // =========================================================
   const renderMobileFullPlayer = () => {
     if (!currentTrack) return null;
@@ -1053,14 +1142,11 @@ export default function App() {
           paddingBottom: 'env(safe-area-inset-bottom)',
         }}
       >
-        {/* Fixed header */}
         <div className="flex items-center justify-between p-4 shrink-0">
           <button onClick={() => setIsMobilePlayerOpen(false)} className="p-2 rounded-full hover:bg-white/10">
             <ChevronDown className="w-6 h-6" />
           </button>
-          <p className={`text-[10px] font-bold tracking-widest uppercase ${theme.textMuted}`}>
-            Now Playing
-          </p>
+          <p className={`text-[10px] font-bold tracking-widest uppercase ${theme.textMuted}`}>Now Playing</p>
           <button
             onClick={() => setIsMobilePlayerMenuOpen(true)}
             className="p-2 rounded-full hover:bg-white/10"
@@ -1069,9 +1155,7 @@ export default function App() {
           </button>
         </div>
 
-        {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto overscroll-contain">
-          {/* Big cover */}
           <div className="px-6 mt-2">
             <div className="aspect-square rounded-3xl overflow-hidden shadow-2xl">
               <img
@@ -1082,7 +1166,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Title + artist */}
           <div className="px-6 mt-6 flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               <p className="text-xl font-bold truncate">{currentTrack.title}</p>
@@ -1094,7 +1177,6 @@ export default function App() {
             </button>
           </div>
 
-          {/* Scrubber with trailing tail */}
           <div className="px-6 mt-6">
             <div className="relative">
               <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 rounded-full bg-slate-700/60" />
@@ -1121,7 +1203,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Controls */}
           <div className="px-6 mt-6 flex items-center justify-between">
             <button onClick={() => setIsShuffle(!isShuffle)}
               className={`p-3 ${isShuffle ? theme.accentText : theme.textMuted}`}>
@@ -1141,7 +1222,6 @@ export default function App() {
             </button>
           </div>
 
-          {/* Up next — scrolls with content, no truncation */}
           <div className="px-6 mt-8 pb-12">
             <p className={`text-[10px] font-bold tracking-widest uppercase mb-3 ${theme.textMuted}`}>Up Next</p>
             {playbackQueue.length > currentTrackIndex + 1 ? (
@@ -1169,7 +1249,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Bottom sheet menu */}
         {isMobilePlayerMenuOpen && (
           <div className="absolute inset-0 z-[70] animate-[fadeIn_0.2s_ease-out]">
             <div
@@ -1184,7 +1263,6 @@ export default function App() {
             >
               <div className="w-12 h-1.5 rounded-full bg-slate-500/40 mx-auto mb-5" />
 
-              {/* Track summary */}
               <div className="flex items-center gap-3 mb-5">
                 <img src={getCoverUrl(currentTrack)} alt={currentTrack.title}
                   className="w-12 h-12 rounded-lg object-cover bg-slate-800"
@@ -1196,7 +1274,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Actions */}
               <div className="space-y-1">
                 <button
                   onClick={(e) => { toggleFavorite(currentTrack.id, e); setIsMobilePlayerMenuOpen(false); }}
@@ -1279,7 +1356,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Search — hidden on Discover */}
           {!showDiscover && (
             <div className="relative flex-1 max-w-md hidden sm:block">
               <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme.textMuted}`} />
@@ -1332,7 +1408,6 @@ export default function App() {
         </aside>
 
         <main className="flex-1 min-w-0 pb-44 md:pb-28">
-          {/* MOBILE SEARCH — hidden on Discover */}
           {!showDiscover && (
             <div className="sm:hidden mb-4 relative">
               <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme.textMuted}`} />
@@ -1443,7 +1518,6 @@ export default function App() {
           />
 
           <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2.5 flex items-center gap-3 sm:gap-4">
-            {/* Track info — tap to open full player on mobile */}
             <div
               className="flex items-center gap-2 sm:gap-3 min-w-0 w-32 sm:w-56 shrink-0 cursor-pointer md:cursor-default"
               onClick={() => { if (window.innerWidth < 768) setIsMobilePlayerOpen(true); }}
@@ -1459,7 +1533,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Controls */}
             <div className="flex-1 flex flex-col items-center gap-1 min-w-0">
               <div className="flex items-center gap-2 sm:gap-4">
                 <button onClick={() => setIsShuffle(!isShuffle)}
@@ -1486,7 +1559,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Scrubber with trailing tail — the ONLY progress bar now */}
               <div className="flex items-center gap-2 w-full max-w-md">
                 <span className={`text-[10px] w-8 text-right ${theme.textMuted}`}>{formatTime(currentTime)}</span>
                 <div className="relative flex-1">
@@ -1512,7 +1584,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Volume — desktop only */}
             <div className="hidden md:flex items-center gap-2 w-40 justify-end">
               <button onClick={() => setIsMuted(!isMuted)} className={`${theme.textMuted} hover:opacity-100 transition`}>
                 {isMuted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
@@ -1529,12 +1600,7 @@ export default function App() {
       )}
 
       {/* FULLSCREEN MOBILE PLAYER */}
-      {renderMobilePlayerFullMount()}
+      {renderMobileFullPlayer()}
     </div>
   );
-
-  // Small helper to keep the render tree tidy — inline at the end
-  function renderMobilePlayerFullMount() {
-    return renderMobileFullPlayer();
-  }
 }
