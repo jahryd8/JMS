@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback} from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2, VolumeX,
   Search, Moon, Sun, Music, Heart, Disc,
   LogOut, Plus, Trash2, X,
   Lock, User, DownloadCloud, ChevronUp, ChevronDown, Menu, Check,
-  HardDriveDownload, WifiOff, MoreHorizontal
+  HardDriveDownload, WifiOff, MoreHorizontal, ListPlus
 } from 'lucide-react';
 import type { Song } from './types/song';
 
@@ -36,114 +36,51 @@ const GENERIC_COVERS = [
   "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=400&q=80"
 ];
 
-// Discover category tiles — pure frontend visual, picks random songs client-side
 const DISCOVER_CATEGORIES = [
-  {
-    id: 'late-night',
-    name: 'Late Night',
-    tagline: 'Slow jams after dark',
+  { id: 'late-night', name: 'Late Night', tagline: 'Slow jams after dark',
     gradient: 'from-indigo-600 via-purple-700 to-slate-900',
-    image: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'throwbacks',
-    name: 'Throwbacks',
-    tagline: 'Old but gold',
+    image: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=800&q=80' },
+  { id: 'throwbacks', name: 'Throwbacks', tagline: 'Old but gold',
     gradient: 'from-amber-500 via-orange-600 to-rose-600',
-    image: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'hype',
-    name: 'Hype',
-    tagline: 'Turn it up',
+    image: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=800&q=80' },
+  { id: 'hype', name: 'Hype', tagline: 'Turn it up',
     gradient: 'from-rose-500 via-red-600 to-purple-700',
-    image: 'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'chill',
-    name: 'Chill Vibes',
-    tagline: 'Easy listening',
+    image: 'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=800&q=80' },
+  { id: 'chill', name: 'Chill Vibes', tagline: 'Easy listening',
     gradient: 'from-teal-500 via-cyan-600 to-blue-700',
-    image: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'workout',
-    name: 'Workout',
-    tagline: 'Push through it',
+    image: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=800&q=80' },
+  { id: 'workout', name: 'Workout', tagline: 'Push through it',
     gradient: 'from-lime-500 via-emerald-600 to-cyan-700',
-    image: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'focus',
-    name: 'Focus',
-    tagline: 'Deep concentration',
+    image: 'https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=800&q=80' },
+  { id: 'focus', name: 'Focus', tagline: 'Deep concentration',
     gradient: 'from-slate-600 via-slate-800 to-black',
-    image: 'https://images.unsplash.com/photo-1483058712412-4245e9b90334?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'feelgood',
-    name: 'Feel Good',
-    tagline: 'Instant mood lift',
+    image: 'https://images.unsplash.com/photo-1483058712412-4245e9b90334?auto=format&fit=crop&w=800&q=80' },
+  { id: 'feelgood', name: 'Feel Good', tagline: 'Instant mood lift',
     gradient: 'from-yellow-400 via-pink-500 to-purple-600',
-    image: 'https://images.unsplash.com/photo-1499364615650-ec38552f4f34?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'romance',
-    name: 'Romance',
-    tagline: 'Love in the air',
+    image: 'https://images.unsplash.com/photo-1499364615650-ec38552f4f34?auto=format&fit=crop&w=800&q=80' },
+  { id: 'romance', name: 'Romance', tagline: 'Love in the air',
     gradient: 'from-pink-500 via-rose-500 to-red-500',
-    image: 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'road-trip',
-    name: 'Road Trip',
-    tagline: 'Windows down',
+    image: 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?auto=format&fit=crop&w=800&q=80' },
+  { id: 'road-trip', name: 'Road Trip', tagline: 'Windows down',
     gradient: 'from-sky-400 via-blue-600 to-indigo-800',
-    image: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'afrobeats',
-    name: 'Afrobeats',
-    tagline: 'Move your body',
+    image: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&w=800&q=80' },
+  { id: 'afrobeats', name: 'Afrobeats', tagline: 'Move your body',
     gradient: 'from-orange-500 via-amber-600 to-yellow-600',
-    image: 'https://images.unsplash.com/photo-1526478806334-5fd488fcaabc?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'reggae',
-    name: 'Reggae',
-    tagline: 'Island time',
+    image: 'https://images.unsplash.com/photo-1526478806334-5fd488fcaabc?auto=format&fit=crop&w=800&q=80' },
+  { id: 'reggae', name: 'Reggae', tagline: 'Island time',
     gradient: 'from-green-500 via-yellow-500 to-red-500',
-    image: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
-  {
-    id: 'nostalgia',
-    name: 'Nostalgia',
-    tagline: 'Rewind the tape',
+    image: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?auto=format&fit=crop&w=800&q=80' },
+  { id: 'nostalgia', name: 'Nostalgia', tagline: 'Rewind the tape',
     gradient: 'from-violet-500 via-fuchsia-600 to-purple-800',
-    image: 'https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=800&q=80',
-    keyword: '',
-  },
+    image: 'https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=800&q=80' },
 ];
 
 const ITEMS_PER_BATCH = 20;
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 const DB_NAME = 'jms_downloads';
 const DB_STORE = 'tracks';
+const THEME_KEY = 'jms_theme';
 
-// ============================================================
-// URL helpers
-// ============================================================
 function toAbsoluteUrl(url: string | undefined): string | undefined {
   if (!url) return url;
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
@@ -151,9 +88,6 @@ function toAbsoluteUrl(url: string | undefined): string | undefined {
   return url;
 }
 
-// ============================================================
-// IndexedDB helpers
-// ============================================================
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1);
@@ -212,12 +146,18 @@ export default function App() {
   const [showWakingMessage, setShowWakingMessage] = useState(false);
 
   // ---------- UI ----------
-  const [darkMode, setDarkMode] = useState(true);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light') return false;
+    if (saved === 'dark') return true;
+    return true; // default dark
+  });
   const [activeTab, setActiveTab] = useState('Discover');
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobilePlayerOpen, setIsMobilePlayerOpen] = useState(false);
+  const [isMobilePlayerMenuOpen, setIsMobilePlayerMenuOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_BATCH);
 
   // ---------- Library / Player ----------
@@ -255,12 +195,19 @@ export default function App() {
     [downloads]
   );
 
-  // ---------- Load downloads from IndexedDB ----------
+  // Persist theme
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, darkMode ? 'dark' : 'light');
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', darkMode ? '#0f172a' : '#fafaf9');
+  }, [darkMode]);
+
+  // Load downloads
   useEffect(() => {
     getAllDownloads().then(setDownloads).catch(err => console.error('DB load failed:', err));
   }, []);
 
-  // ---------- Online/Offline ----------
+  // Online/offline
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
     const onOffline = () => setIsOnline(false);
@@ -272,7 +219,6 @@ export default function App() {
     };
   }, []);
 
-  // ---------- Cover helper ----------
   const getCoverUrl = (song?: Song): string => {
     if (!song) return GENERIC_COVERS[0];
     if (song.coverPath) {
@@ -310,7 +256,6 @@ export default function App() {
     setLoginError('');
     setIsLoggingIn(true);
     setShowWakingMessage(false);
-
     const wakingTimer = window.setTimeout(() => setShowWakingMessage(true), 3000);
 
     const attemptLogin = async (): Promise<{ ok: boolean; data?: any; networkError?: boolean }> => {
@@ -369,27 +314,20 @@ export default function App() {
   const fetchLibrary = async () => {
     if (!authToken) return;
     setIsLoading(true);
-
     const tryFetch = async (): Promise<Response | null> => {
       try {
         return await fetch(`${API_BASE}/api/library/songs?page=1&limit=1000`, {
           headers: { Authorization: `Bearer ${authToken}` },
         });
-      } catch {
-        return null;
-      }
+      } catch { return null; }
     };
-
     try {
       let response = await tryFetch();
       if (!response) {
         await new Promise(r => setTimeout(r, 5000));
         response = await tryFetch();
       }
-      if (!response) {
-        console.error('[Library] Failed after retry');
-        return;
-      }
+      if (!response) return;
       if (response.ok) {
         const data = await response.json();
         const incomingSongs: Song[] = data.songs || [];
@@ -412,13 +350,20 @@ export default function App() {
     if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
 
-  // ---------- Track loading ----------
+  // ---------- Track loading (offline-aware) ----------
   useEffect(() => {
     if (!audioRef.current || !currentTrack) return;
     const localDownload = downloads.find(d => d.id === currentTrack.id);
     let url: string;
-    if (localDownload) url = URL.createObjectURL(localDownload.blob);
-    else url = getAudioUrl(currentTrack);
+    if (localDownload) {
+      url = URL.createObjectURL(localDownload.blob);
+    } else if (!isOnline) {
+      // Offline and no local copy — don't try the network
+      console.warn('[Player] Offline and track not downloaded:', currentTrack.title);
+      return;
+    } else {
+      url = getAudioUrl(currentTrack);
+    }
 
     audioRef.current.src = url;
     audioRef.current.load();
@@ -426,7 +371,7 @@ export default function App() {
 
     return () => { if (localDownload) URL.revokeObjectURL(url); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTrackIndex, currentTrack?.id, authToken, downloads]);
+  }, [currentTrackIndex, currentTrack?.id, authToken, downloads, isOnline]);
 
   // ---------- Player controls ----------
   const handlePlayTrack = (track: Song, targetList: Song[]) => {
@@ -500,8 +445,7 @@ export default function App() {
             received += value.length;
             if (contentLength) {
               setDownloadProgress(prev => ({
-                ...prev,
-                [song.id]: Math.round((received / contentLength) * 100)
+                ...prev, [song.id]: Math.round((received / contentLength) * 100)
               }));
             }
           }
@@ -602,20 +546,15 @@ export default function App() {
 
   const activePlaylist = playlists.find(p => p.id === activePlaylistId);
 
-  // ---------- Discover: play a random song from library ----------
-  const playRandomFromLibrary = (categoryName: string) => {
+  const playRandomFromLibrary = (_categoryName: string) => {
     if (allSongs.length === 0) return;
     const randomIdx = Math.floor(Math.random() * allSongs.length);
     const track = allSongs[randomIdx];
-    // Shuffle the queue so "next" is random too
     const shuffled = [...allSongs].sort(() => Math.random() - 0.5);
     handlePlayTrack(track, shuffled);
-    setIsMobilePlayerOpen(true);
-    // Brief toast via console — the mini-player will pop up automatically
-    console.log(`[Discover] Playing "${track.title}" from "${categoryName}"`);
+    // Do NOT open the full player — user can tap the mini-player
   };
 
-  // ---------- Filtering ----------
   const getDisplayedSongs = (): Song[] => {
     let baseList = allSongs;
     if (activeTab === 'Downloads') baseList = downloads.map(d => d.song);
@@ -639,7 +578,6 @@ export default function App() {
   const getPlaylistRealCount = (pl: Playlist) =>
     pl.songIds.filter(id => allSongs.some(s => s.id === id)).length;
 
-  // Progress % for the currently playing song
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   // =========================================================
@@ -690,9 +628,7 @@ export default function App() {
             </div>
           </div>
           <h1 className="text-2xl font-bold text-center mb-1">JMS Server</h1>
-          <p className={`text-sm text-center mb-6 ${theme.textMuted}`}>
-            Authorized Private Server Access Only
-          </p>
+          <p className={`text-sm text-center mb-6 ${theme.textMuted}`}>Authorized Private Server Access Only</p>
 
           {loginError && (
             <div className="mb-4 px-3 py-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs">
@@ -716,7 +652,6 @@ export default function App() {
                 />
               </div>
             </div>
-
             <div>
               <label className={`block text-xs font-medium mb-1.5 ${theme.textMuted}`}>Password</label>
               <div className="relative">
@@ -732,7 +667,6 @@ export default function App() {
                 />
               </div>
             </div>
-
             <button
               type="submit" disabled={isLoggingIn}
               className={`w-full py-2.5 rounded-xl text-white text-sm font-semibold transition shadow-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-wait ${
@@ -744,7 +678,6 @@ export default function App() {
                 <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />Connecting...</>
               ) : ('Sign In to JMS')}
             </button>
-
             {showWakingMessage && (
               <p className={`text-[11px] text-center mt-2 animate-pulse ${darkMode ? 'text-amber-400' : 'text-amber-600'}`}>
                 Waking up the server — this can take up to 50 seconds on the first login...
@@ -776,11 +709,7 @@ export default function App() {
             return (
               <button
                 key={item.name}
-                onClick={() => {
-                  setActiveTab(item.name);
-                  setActivePlaylistId(null);
-                  setIsMobileMenuOpen(false);
-                }}
+                onClick={() => { setActiveTab(item.name); setActivePlaylistId(null); setIsMobileMenuOpen(false); }}
                 className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
                   isActive
                     ? (darkMode ? 'bg-blue-600 text-white shadow-md' : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-500/30')
@@ -810,7 +739,6 @@ export default function App() {
             <Plus className="w-4 h-4" />
           </button>
         </div>
-
         <div className="space-y-1">
           {playlists.map((pl) => {
             const isActive = activeTab === 'PlaylistView' && activePlaylistId === pl.id;
@@ -818,11 +746,7 @@ export default function App() {
             return (
               <div
                 key={pl.id}
-                onClick={() => {
-                  setActivePlaylistId(pl.id);
-                  setActiveTab('PlaylistView');
-                  setIsMobileMenuOpen(false);
-                }}
+                onClick={() => { setActivePlaylistId(pl.id); setActiveTab('PlaylistView'); setIsMobileMenuOpen(false); }}
                 className={`group w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all ${
                   isActive
                     ? (darkMode ? 'bg-blue-600 text-white shadow-md' : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-500/30')
@@ -837,7 +761,6 @@ export default function App() {
                   {!pl.isSystem && (
                     <button
                       onClick={(e) => deletePlaylist(pl.id, e)}
-                      // Always visible on mobile; hover-only on desktop
                       className={`p-1 rounded transition md:opacity-0 md:group-hover:opacity-100 ${
                         isActive ? 'hover:bg-white/20 text-white' : darkMode ? 'hover:text-rose-400' : 'hover:text-rose-500'
                       }`}
@@ -865,17 +788,29 @@ export default function App() {
   );
 
   // =========================================================
-  // DISCOVER GRID
+  // DISCOVER GRID — bigger, more spectacle, no search
   // =========================================================
   const renderDiscover = () => (
     <div className="animate-[fadeIn_0.4s_ease-out]">
-      <div className={`p-5 sm:p-6 rounded-2xl mb-6 border bg-gradient-to-br ${theme.heroGrad} ${theme.heroBorder}`}>
-        <h1 className={`text-xl sm:text-3xl font-bold mb-1 ${darkMode ? '' : 'text-slate-900'}`}>
-          Discover
-        </h1>
-        <p className={`text-xs sm:text-sm ${darkMode ? 'text-slate-400' : 'text-slate-700'}`}>
-          Tap any vibe to drop into a random track from your library
-        </p>
+      {/* Big hero */}
+      <div className={`relative p-8 sm:p-12 rounded-3xl mb-6 sm:mb-8 border overflow-hidden bg-gradient-to-br ${theme.heroGrad} ${theme.heroBorder}`}>
+        <div className="absolute -top-24 -right-24 w-64 h-64 rounded-full bg-blue-500/10 blur-3xl" />
+        <div className="absolute -bottom-24 -left-24 w-64 h-64 rounded-full bg-purple-500/10 blur-3xl" />
+        <div className="relative">
+          <p className={`text-[10px] sm:text-xs font-bold tracking-[0.3em] uppercase mb-2 ${darkMode ? 'text-blue-400' : 'text-indigo-600'}`}>
+            Jah's Music Station
+          </p>
+          <h1 className={`text-3xl sm:text-5xl lg:text-6xl font-black leading-tight mb-3 ${
+            darkMode
+              ? 'bg-gradient-to-r from-white via-blue-100 to-purple-200 bg-clip-text text-transparent'
+              : 'bg-gradient-to-r from-indigo-700 via-purple-700 to-pink-600 bg-clip-text text-transparent'
+          }`}>
+            Discover
+          </h1>
+          <p className={`text-sm sm:text-base max-w-2xl ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+            Tap any vibe to drop into a random track from your library.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -883,7 +818,7 @@ export default function App() {
           <button
             key={cat.id}
             onClick={() => playRandomFromLibrary(cat.name)}
-            className={`group relative h-32 sm:h-40 rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 text-left border border-white/10`}
+            className="group relative h-36 sm:h-44 rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 text-left border border-white/10"
           >
             <img
               src={cat.image}
@@ -894,14 +829,10 @@ export default function App() {
             <div className={`absolute inset-0 bg-gradient-to-br ${cat.gradient} opacity-80 group-hover:opacity-70 transition-opacity duration-300`} />
             <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
             <div className="absolute inset-0 p-4 flex flex-col justify-end">
-              <p className="text-white font-bold text-base sm:text-lg leading-tight drop-shadow-lg">
-                {cat.name}
-              </p>
-              <p className="text-white/70 text-[10px] sm:text-xs mt-0.5 drop-shadow">
-                {cat.tagline}
-              </p>
+              <p className="text-white font-bold text-lg sm:text-xl leading-tight drop-shadow-lg">{cat.name}</p>
+              <p className="text-white/70 text-[10px] sm:text-xs mt-0.5 drop-shadow">{cat.tagline}</p>
             </div>
-            <div className="absolute top-3 right-3 w-8 h-8 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-3 right-3 w-9 h-9 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
               <Play className="w-4 h-4 text-white fill-white" />
             </div>
           </button>
@@ -911,7 +842,7 @@ export default function App() {
   );
 
   // =========================================================
-  // TRACK ROW
+  // TRACK ROW — no auto-open of full player
   // =========================================================
   const renderTrackRow = (song: Song, idx: number) => {
     const isCurrent = currentTrack?.id === song.id;
@@ -924,14 +855,13 @@ export default function App() {
     return (
       <div
         key={song.id}
-        onClick={() => { handlePlayTrack(song, fullFilteredSongs); setIsMobilePlayerOpen(true); }}
+        onClick={() => handlePlayTrack(song, fullFilteredSongs)}  // ← no setIsMobilePlayerOpen
         className={`group relative flex items-center justify-between gap-2 p-2 sm:p-3.5 rounded-xl transition-all cursor-pointer border overflow-hidden ${
           isCurrent
             ? (darkMode ? 'bg-blue-600/20 border-blue-500/40' : 'bg-indigo-100 border-indigo-300')
             : (darkMode ? 'hover:bg-slate-800/60 border-transparent' : 'hover:bg-white border-transparent hover:border-indigo-100')
         }`}
       >
-        {/* Row progress bar */}
         {isCurrent && rowProgress > 0 && (
           <div className="absolute left-0 bottom-0 h-0.5 bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-300" style={{ width: `${rowProgress}%` }} />
         )}
@@ -956,9 +886,7 @@ export default function App() {
           </div>
 
           <div className="min-w-0 flex-1">
-            <p className={`text-xs sm:text-sm font-semibold truncate ${isCurrent ? theme.accentText : ''}`}>
-              {song.title}
-            </p>
+            <p className={`text-xs sm:text-sm font-semibold truncate ${isCurrent ? theme.accentText : ''}`}>{song.title}</p>
             <p className={`text-[10px] sm:text-xs truncate ${theme.textMuted}`}>{song.artist}</p>
           </div>
         </div>
@@ -1017,7 +945,6 @@ export default function App() {
               title="Add to Playlist">
               <Plus className="w-4 h-4" />
             </button>
-
             {isDropdownOpen && (
               <div onClick={(e) => e.stopPropagation()}
                 className={`absolute right-0 top-full mt-2 w-48 rounded-xl shadow-xl border z-50 p-2 ${
@@ -1053,16 +980,14 @@ export default function App() {
     <div className="animate-[fadeIn_0.4s_ease-out]">
       <div className={`p-5 sm:p-6 rounded-2xl mb-6 border bg-gradient-to-br ${theme.heroGrad} ${theme.heroBorder}`}>
         <h1 className={`text-xl sm:text-3xl font-bold mb-1 ${darkMode ? '' : 'text-slate-900'}`}>
-          {activePlaylist
-            ? activePlaylist.name
-            : activeTab === 'Downloads' ? 'Offline Library' : "Jah's Music Station"}
+          {activePlaylist ? activePlaylist.name : activeTab === 'Downloads' ? 'Offline Library' : "Jah's Music Station"}
         </h1>
         <p className={`text-xs sm:text-sm ${darkMode ? 'text-slate-400' : 'text-slate-700'}`}>
           {activePlaylist
             ? `Custom playlist with ${getPlaylistRealCount(activePlaylist)} tracks.`
             : activeTab === 'Downloads'
               ? `${downloads.length} track${downloads.length === 1 ? '' : 's'} available offline.`
-              : 'Welcome to your private music library. Stream anywhere seamlessly. Made by Jah (yours truly).'} 
+              : 'Welcome to your private music library. Stream anywhere seamlessly. Made by Jah (yours truly).'}
         </p>
       </div>
 
@@ -1110,106 +1035,207 @@ export default function App() {
   );
 
   // =========================================================
-  // FULLSCREEN MOBILE PLAYER
+  // FULLSCREEN MOBILE PLAYER — scrollable, with working menu
   // =========================================================
   const renderMobileFullPlayer = () => {
     if (!currentTrack) return null;
+    const isCurrentFav = isFavorite(currentTrack.id);
+    const isCurrentDownloaded = isDownloaded(currentTrack.id);
+    const downloadProg = downloadProgress[currentTrack.id];
+
     return (
-      <div className={`fixed inset-0 z-[60] md:hidden transform transition-transform duration-300 ${
-        isMobilePlayerOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none'
-      } ${darkMode ? 'bg-slate-950' : 'bg-white'}`}
-        style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+      <div
+        className={`fixed inset-0 z-[60] md:hidden flex flex-col transform transition-transform duration-300 ${
+          isMobilePlayerOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none'
+        } ${darkMode ? 'bg-slate-950' : 'bg-white'}`}
+        style={{
+          paddingTop: 'env(safe-area-inset-top)',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4">
+        {/* Fixed header */}
+        <div className="flex items-center justify-between p-4 shrink-0">
           <button onClick={() => setIsMobilePlayerOpen(false)} className="p-2 rounded-full hover:bg-white/10">
             <ChevronDown className="w-6 h-6" />
           </button>
           <p className={`text-[10px] font-bold tracking-widest uppercase ${theme.textMuted}`}>
             Now Playing
           </p>
-          <button className="p-2 rounded-full hover:bg-white/10">
+          <button
+            onClick={() => setIsMobilePlayerMenuOpen(true)}
+            className="p-2 rounded-full hover:bg-white/10"
+          >
             <MoreHorizontal className="w-6 h-6" />
           </button>
         </div>
 
-        {/* Big cover */}
-        <div className="px-8 mt-4">
-          <div className="aspect-square rounded-3xl overflow-hidden shadow-2xl">
-            <img
-              src={getCoverUrl(currentTrack)} alt={currentTrack.title}
-              onError={(e) => { (e.target as HTMLImageElement).src = GENERIC_COVERS[0]; }}
-              className="w-full h-full object-cover"
-            />
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          {/* Big cover */}
+          <div className="px-6 mt-2">
+            <div className="aspect-square rounded-3xl overflow-hidden shadow-2xl">
+              <img
+                src={getCoverUrl(currentTrack)} alt={currentTrack.title}
+                onError={(e) => { (e.target as HTMLImageElement).src = GENERIC_COVERS[0]; }}
+                className="w-full h-full object-cover"
+              />
+            </div>
           </div>
-        </div>
 
-        {/* Title + artist */}
-        <div className="px-8 mt-8 flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <p className="text-xl font-bold truncate">{currentTrack.title}</p>
-            <p className={`text-sm truncate ${theme.textMuted}`}>{currentTrack.artist}</p>
+          {/* Title + artist */}
+          <div className="px-6 mt-6 flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-xl font-bold truncate">{currentTrack.title}</p>
+              <p className={`text-sm truncate ${theme.textMuted}`}>{currentTrack.artist}</p>
+            </div>
+            <button onClick={(e) => toggleFavorite(currentTrack.id, e)}
+              className={`p-2 rounded-full shrink-0 ${isCurrentFav ? 'text-rose-500' : theme.textMuted}`}>
+              <Heart className={`w-6 h-6 ${isCurrentFav ? 'fill-rose-500' : ''}`} />
+            </button>
           </div>
-          <button onClick={(e) => toggleFavorite(currentTrack.id, e)}
-            className={`p-2 rounded-full ${isFavorite(currentTrack.id) ? 'text-rose-500' : theme.textMuted}`}>
-            <Heart className={`w-6 h-6 ${isFavorite(currentTrack.id) ? 'fill-rose-500' : ''}`} />
-          </button>
-        </div>
 
-        {/* Scrubber */}
-        <div className="px-8 mt-6">
-          <input
-            type="range" min={0} max={duration || 0} value={currentTime} onChange={handleSeek}
-            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-          />
-          <div className="flex justify-between mt-2 text-xs text-slate-500">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
+          {/* Scrubber with trailing tail */}
+          <div className="px-6 mt-6">
+            <div className="relative">
+              <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 rounded-full bg-slate-700/60" />
+              <div
+                className="absolute top-1/2 -translate-y-1/2 left-0 h-1.5 rounded-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-150"
+                style={{ width: `${progressPct}%` }}
+              />
+              <input
+                type="range" min={0} max={duration || 0} value={currentTime}
+                onChange={handleSeek}
+                className="relative w-full h-6 bg-transparent appearance-none cursor-pointer z-10
+                           [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5
+                           [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white
+                           [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:border-2
+                           [&::-webkit-slider-thumb]:border-emerald-400
+                           [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5
+                           [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white
+                           [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-emerald-400"
+              />
+            </div>
+            <div className="flex justify-between mt-2 text-xs text-slate-500">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
           </div>
-        </div>
 
-        {/* Controls */}
-        <div className="px-8 mt-6 flex items-center justify-between">
-          <button onClick={() => setIsShuffle(!isShuffle)}
-            className={`p-3 ${isShuffle ? theme.accentText : theme.textMuted}`}>
-            <Shuffle className="w-6 h-6" />
-          </button>
-          <button onClick={handlePrev} className="p-3"><SkipBack className="w-8 h-8" /></button>
-          <button onClick={togglePlay}
-            className={`w-16 h-16 rounded-full flex items-center justify-center shadow-xl ${
-              darkMode ? 'bg-white text-slate-900' : 'bg-gradient-to-br from-indigo-600 to-purple-600 text-white'
-            }`}>
-            {isPlaying ? <Pause className="w-7 h-7 fill-current" /> : <Play className="w-7 h-7 fill-current ml-1" />}
-          </button>
-          <button onClick={handleNext} className="p-3"><SkipForward className="w-8 h-8" /></button>
-          <button onClick={() => setIsRepeat(!isRepeat)}
-            className={`p-3 ${isRepeat ? theme.accentText : theme.textMuted}`}>
-            <Repeat className="w-6 h-6" />
-          </button>
-        </div>
+          {/* Controls */}
+          <div className="px-6 mt-6 flex items-center justify-between">
+            <button onClick={() => setIsShuffle(!isShuffle)}
+              className={`p-3 ${isShuffle ? theme.accentText : theme.textMuted}`}>
+              <Shuffle className="w-6 h-6" />
+            </button>
+            <button onClick={handlePrev} className="p-3"><SkipBack className="w-8 h-8" /></button>
+            <button onClick={togglePlay}
+              className={`w-16 h-16 rounded-full flex items-center justify-center shadow-xl ${
+                darkMode ? 'bg-white text-slate-900' : 'bg-gradient-to-br from-indigo-600 to-purple-600 text-white'
+              }`}>
+              {isPlaying ? <Pause className="w-7 h-7 fill-current" /> : <Play className="w-7 h-7 fill-current ml-1" />}
+            </button>
+            <button onClick={handleNext} className="p-3"><SkipForward className="w-8 h-8" /></button>
+            <button onClick={() => setIsRepeat(!isRepeat)}
+              className={`p-3 ${isRepeat ? theme.accentText : theme.textMuted}`}>
+              <Repeat className="w-6 h-6" />
+            </button>
+          </div>
 
-        {/* Up next */}
-        <div className="px-8 mt-8 flex-1 overflow-y-auto pb-32">
-          <p className={`text-[10px] font-bold tracking-widest uppercase mb-3 ${theme.textMuted}`}>Up Next</p>
-          <div className="space-y-1">
-            {playbackQueue.slice(currentTrackIndex + 1, currentTrackIndex + 6).map((song) => (
-              <div key={song.id} onClick={() => handlePlayTrack(song, playbackQueue)}
-                className={`flex items-center gap-3 p-2 rounded-xl cursor-pointer ${theme.hover}`}>
-                <img src={getCoverUrl(song)} alt={song.title}
-                  className="w-10 h-10 rounded-lg object-cover bg-slate-800"
-                  onError={(e) => { (e.target as HTMLImageElement).src = GENERIC_COVERS[0]; }}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{song.title}</p>
-                  <p className={`text-xs truncate ${theme.textMuted}`}>{song.artist}</p>
-                </div>
+          {/* Up next — scrolls with content, no truncation */}
+          <div className="px-6 mt-8 pb-12">
+            <p className={`text-[10px] font-bold tracking-widest uppercase mb-3 ${theme.textMuted}`}>Up Next</p>
+            {playbackQueue.length > currentTrackIndex + 1 ? (
+              <div className="space-y-1">
+                {playbackQueue.slice(currentTrackIndex + 1).map((song) => (
+                  <div
+                    key={song.id}
+                    onClick={() => handlePlayTrack(song, playbackQueue)}
+                    className={`flex items-center gap-3 p-2 rounded-xl cursor-pointer ${theme.hover}`}
+                  >
+                    <img src={getCoverUrl(song)} alt={song.title}
+                      className="w-10 h-10 rounded-lg object-cover bg-slate-800"
+                      onError={(e) => { (e.target as HTMLImageElement).src = GENERIC_COVERS[0]; }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{song.title}</p>
+                      <p className={`text-xs truncate ${theme.textMuted}`}>{song.artist}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-            {playbackQueue.length <= currentTrackIndex + 1 && (
+            ) : (
               <p className={`text-xs text-center py-4 ${theme.textMuted}`}>End of queue</p>
             )}
           </div>
         </div>
+
+        {/* Bottom sheet menu */}
+        {isMobilePlayerMenuOpen && (
+          <div className="absolute inset-0 z-[70] animate-[fadeIn_0.2s_ease-out]">
+            <div
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setIsMobilePlayerMenuOpen(false)}
+            />
+            <div
+              className={`absolute left-0 right-0 bottom-0 rounded-t-3xl p-5 animate-[slideUp_0.25s_ease-out] ${
+                darkMode ? 'bg-slate-900' : 'bg-white'
+              }`}
+              style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
+            >
+              <div className="w-12 h-1.5 rounded-full bg-slate-500/40 mx-auto mb-5" />
+
+              {/* Track summary */}
+              <div className="flex items-center gap-3 mb-5">
+                <img src={getCoverUrl(currentTrack)} alt={currentTrack.title}
+                  className="w-12 h-12 rounded-lg object-cover bg-slate-800"
+                  onError={(e) => { (e.target as HTMLImageElement).src = GENERIC_COVERS[0]; }}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold truncate">{currentTrack.title}</p>
+                  <p className={`text-xs truncate ${theme.textMuted}`}>{currentTrack.artist}</p>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="space-y-1">
+                <button
+                  onClick={(e) => { toggleFavorite(currentTrack.id, e); setIsMobilePlayerMenuOpen(false); }}
+                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition ${theme.hover}`}
+                >
+                  <Heart className={`w-5 h-5 ${isCurrentFav ? 'text-rose-500 fill-rose-500' : ''}`} />
+                  {isCurrentFav ? 'Remove from Favourites' : 'Add to Favourites'}
+                </button>
+
+                <button
+                  onClick={() => { setIsMobilePlayerMenuOpen(false); setIsMobilePlayerOpen(false); setOpenDropdownSongId(currentTrack.id); }}
+                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition ${theme.hover}`}
+                >
+                  <ListPlus className="w-5 h-5" />
+                  Add to Playlist
+                </button>
+
+                <button
+                  onClick={(e) => { downloadTrack(currentTrack, e); setIsMobilePlayerMenuOpen(false); }}
+                  disabled={downloadProg !== undefined || isCurrentDownloaded}
+                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition disabled:opacity-50 ${theme.hover}`}
+                >
+                  <HardDriveDownload className={`w-5 h-5 ${isCurrentDownloaded ? 'text-emerald-500' : ''}`} />
+                  {downloadProg !== undefined
+                    ? `Downloading ${downloadProg}%`
+                    : isCurrentDownloaded ? 'Downloaded' : 'Download for offline'}
+                </button>
+
+                <button
+                  onClick={() => setIsMobilePlayerMenuOpen(false)}
+                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition ${theme.hover}`}
+                >
+                  <X className="w-5 h-5" />
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -1217,12 +1243,18 @@ export default function App() {
   // =========================================================
   // MAIN APP
   // =========================================================
+  const showDiscover = activeTab === 'Discover' && !activePlaylistId;
+
   return (
     <div className={`min-h-screen transition-colors duration-300 ${theme.bg} ${theme.text}`}>
       <style>{`
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes slideUp {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
         }
       `}</style>
 
@@ -1240,24 +1272,28 @@ export default function App() {
               </div>
               <span className="font-bold text-base sm:text-lg tracking-tight">JMS</span>
               {!isOnline && (
-                <span className="hidden sm:inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-500 font-semibold">
+                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-500 font-semibold">
                   <WifiOff className="w-3 h-3" /> Offline
                 </span>
               )}
             </div>
           </div>
 
-          <div className="relative flex-1 max-w-md hidden sm:block">
-            <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme.textMuted}`} />
-            <input
-              type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search songs, artists..."
-              className={`w-full pl-9 pr-4 py-1.5 rounded-full text-xs sm:text-sm outline-none transition-all ${
-                darkMode ? 'bg-slate-800/80 text-white border border-slate-700 focus:border-blue-500'
-                          : 'bg-white text-slate-800 border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
-              }`}
-            />
-          </div>
+          {/* Search — hidden on Discover */}
+          {!showDiscover && (
+            <div className="relative flex-1 max-w-md hidden sm:block">
+              <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme.textMuted}`} />
+              <input
+                type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search songs, artists..."
+                className={`w-full pl-9 pr-4 py-1.5 rounded-full text-xs sm:text-sm outline-none transition-all ${
+                  darkMode ? 'bg-slate-800/80 text-white border border-slate-700 focus:border-blue-500'
+                            : 'bg-white text-slate-800 border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
+                }`}
+              />
+            </div>
+          )}
+          {showDiscover && <div className="flex-1 max-w-md hidden sm:block" />}
 
           <div className="flex items-center gap-2">
             <button onClick={() => setDarkMode(!darkMode)}
@@ -1296,20 +1332,22 @@ export default function App() {
         </aside>
 
         <main className="flex-1 min-w-0 pb-44 md:pb-28">
-          {/* MOBILE SEARCH */}
-          <div className="sm:hidden mb-4 relative">
-            <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme.textMuted}`} />
-            <input
-              type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search songs, artists..."
-              className={`w-full pl-9 pr-4 py-2 rounded-full text-sm outline-none ${
-                darkMode ? 'bg-slate-800/80 text-white border border-slate-700 focus:border-blue-500'
-                          : 'bg-white text-slate-800 border border-slate-300 focus:border-indigo-500'
-              }`}
-            />
-          </div>
+          {/* MOBILE SEARCH — hidden on Discover */}
+          {!showDiscover && (
+            <div className="sm:hidden mb-4 relative">
+              <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${theme.textMuted}`} />
+              <input
+                type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search songs, artists..."
+                className={`w-full pl-9 pr-4 py-2 rounded-full text-sm outline-none ${
+                  darkMode ? 'bg-slate-800/80 text-white border border-slate-700 focus:border-blue-500'
+                            : 'bg-white text-slate-800 border border-slate-300 focus:border-indigo-500'
+                }`}
+              />
+            </div>
+          )}
 
-          {activeTab === 'Discover' && !activePlaylistId ? renderDiscover() : renderTrackList()}
+          {showDiscover ? renderDiscover() : renderTrackList()}
         </main>
       </div>
 
@@ -1387,25 +1425,12 @@ export default function App() {
         </div>
       )}
 
-      {/* PLAYER FOOTER (mini-player) */}
+      {/* MINI-PLAYER */}
       {currentTrack && (
         <footer
-          className={`fixed left-0 right-0 z-30 border-t backdrop-blur-md cursor-pointer md:cursor-default ${theme.playerBar}`}
-          style={{
-            bottom: 'calc(60px + env(safe-area-inset-bottom))',
-          }}
-          onClick={() => {
-            if (window.innerWidth < 768) setIsMobilePlayerOpen(true);
-          }}
+          className={`fixed left-0 right-0 z-30 border-t backdrop-blur-md ${theme.playerBar}`}
+          style={{ bottom: 'calc(60px + env(safe-area-inset-bottom))' }}
         >
-          {/* Progress bar at very top of player */}
-          <div className="absolute top-0 left-0 right-0 h-0.5 bg-slate-700/40">
-            <div
-              className="h-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-200"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-
           <audio
             ref={audioRef}
             onTimeUpdate={handleTimeUpdate}
@@ -1418,7 +1443,11 @@ export default function App() {
           />
 
           <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2.5 flex items-center gap-3 sm:gap-4">
-            <div className="flex items-center gap-2 sm:gap-3 min-w-0 w-32 sm:w-56 shrink-0">
+            {/* Track info — tap to open full player on mobile */}
+            <div
+              className="flex items-center gap-2 sm:gap-3 min-w-0 w-32 sm:w-56 shrink-0 cursor-pointer md:cursor-default"
+              onClick={() => { if (window.innerWidth < 768) setIsMobilePlayerOpen(true); }}
+            >
               <img
                 src={getCoverUrl(currentTrack)} alt={currentTrack.title}
                 onError={(e) => { (e.target as HTMLImageElement).src = GENERIC_COVERS[0]; }}
@@ -1430,45 +1459,60 @@ export default function App() {
               </div>
             </div>
 
+            {/* Controls */}
             <div className="flex-1 flex flex-col items-center gap-1 min-w-0">
               <div className="flex items-center gap-2 sm:gap-4">
-                <button onClick={(e) => { e.stopPropagation(); setIsShuffle(!isShuffle); }}
+                <button onClick={() => setIsShuffle(!isShuffle)}
                   className={`hidden sm:block transition ${isShuffle ? theme.accentText : 'text-slate-400 hover:text-slate-200'}`}>
                   <Shuffle className="w-4 h-4" />
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); handlePrev(); }}
+                <button onClick={handlePrev}
                   className={`${darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-indigo-600'} transition`}>
                   <SkipBack className="w-5 h-5" />
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+                <button onClick={togglePlay}
                   className={`w-10 h-10 rounded-full flex items-center justify-center hover:scale-105 transition shadow-lg ${
                     darkMode ? 'bg-white text-slate-900' : 'bg-gradient-to-br from-indigo-600 to-purple-600 text-white'
                   }`}>
                   {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); handleNext(); }}
+                <button onClick={handleNext}
                   className={`${darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-indigo-600'} transition`}>
                   <SkipForward className="w-5 h-5" />
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); setIsRepeat(!isRepeat); }}
+                <button onClick={() => setIsRepeat(!isRepeat)}
                   className={`hidden sm:block transition ${isRepeat ? theme.accentText : 'text-slate-400 hover:text-slate-200'}`}>
                   <Repeat className="w-4 h-4" />
                 </button>
               </div>
 
-              {/* Scrubber — now visible on all screens */}
+              {/* Scrubber with trailing tail — the ONLY progress bar now */}
               <div className="flex items-center gap-2 w-full max-w-md">
                 <span className={`text-[10px] w-8 text-right ${theme.textMuted}`}>{formatTime(currentTime)}</span>
-                <input
-                  type="range" min={0} max={duration || 0} value={currentTime}
-                  onChange={handleSeek}
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex-1 h-1 bg-slate-300 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                />
+                <div className="relative flex-1">
+                  <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1 rounded-full bg-slate-300 dark:bg-slate-700" />
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 left-0 h-1 rounded-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all duration-150"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                  <input
+                    type="range" min={0} max={duration || 0} value={currentTime}
+                    onChange={handleSeek}
+                    className="relative w-full h-4 bg-transparent appearance-none cursor-pointer z-10
+                               [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+                               [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white
+                               [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:border-2
+                               [&::-webkit-slider-thumb]:border-emerald-400
+                               [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3
+                               [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white
+                               [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-emerald-400"
+                  />
+                </div>
                 <span className={`text-[10px] w-8 ${theme.textMuted}`}>{formatTime(duration)}</span>
               </div>
             </div>
 
+            {/* Volume — desktop only */}
             <div className="hidden md:flex items-center gap-2 w-40 justify-end">
               <button onClick={() => setIsMuted(!isMuted)} className={`${theme.textMuted} hover:opacity-100 transition`}>
                 {isMuted || volume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
@@ -1485,7 +1529,12 @@ export default function App() {
       )}
 
       {/* FULLSCREEN MOBILE PLAYER */}
-      {renderMobileFullPlayer()}
+      {renderMobilePlayerFullMount()}
     </div>
   );
+
+  // Small helper to keep the render tree tidy — inline at the end
+  function renderMobilePlayerFullMount() {
+    return renderMobileFullPlayer();
+  }
 }
