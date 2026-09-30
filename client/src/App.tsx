@@ -133,6 +133,120 @@ async function removeDownload(id: string): Promise<void> {
   });
 }
 
+// ============================================================
+// useMediaSession — bridges HTML5 audio to the OS media UI
+// ============================================================
+interface MediaSessionHandlers {
+  currentTrack?: Song;
+  isPlaying: boolean;
+  currentTime: number;
+  duration: number;
+  coverUrl: string;
+  onPlay: () => void;
+  onPause: () => void;
+  onNext: () => void;
+  onPrev: () => void;
+  onSeek: (time: number) => void;
+  onStop: () => void;
+}
+
+function useMediaSession({
+  currentTrack,
+  isPlaying,
+  currentTime,
+  duration,
+  coverUrl,
+  onPlay,
+  onPause,
+  onNext,
+  onPrev,
+  onSeek,
+  onStop,
+}: MediaSessionHandlers) {
+  // Metadata (title / artist / album / artwork)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    if (!currentTrack) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        album: currentTrack.album || 'JMS',
+        artwork: [
+          { src: coverUrl, sizes: '96x96', type: 'image/jpeg' },
+          { src: coverUrl, sizes: '128x128', type: 'image/jpeg' },
+          { src: coverUrl, sizes: '192x192', type: 'image/jpeg' },
+          { src: coverUrl, sizes: '256x256', type: 'image/jpeg' },
+          { src: coverUrl, sizes: '384x384', type: 'image/jpeg' },
+          { src: coverUrl, sizes: '512x512', type: 'image/jpeg' },
+        ],
+      });
+    } catch (err) {
+      console.warn('[MediaSession] Failed to set metadata:', err);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack?.id, coverUrl]);
+
+  // Playback state — drives the play/pause icon on lock screen
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
+
+  // Position state — drives the lock screen progress bar
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    if (!navigator.mediaSession.setPositionState) return;
+    if (!duration || duration <= 0 || !isFinite(duration)) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration,
+        playbackRate: 1,
+        position: Math.min(Math.max(0, currentTime), duration),
+      });
+    } catch {
+      // Some browsers throw if position > duration; ignore
+    }
+  }, [currentTime, duration]);
+
+  // Action handlers — bind once, keep refs fresh via a stable effect
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+
+    const safeSet = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try { ms.setActionHandler(action, handler); } catch { /* unsupported action */ }
+    };
+
+    safeSet('play', () => { onPlay(); });
+    safeSet('pause', () => { onPause(); });
+    safeSet('previoustrack', () => { onPrev(); });
+    safeSet('nexttrack', () => { onNext(); });
+    safeSet('stop', () => { onStop(); });
+
+    safeSet('seekbackward', (details) => {
+      const offset = details.seekOffset ?? 10;
+      onSeek(Math.max(0, currentTime - offset));
+    });
+    safeSet('seekforward', (details) => {
+      const offset = details.seekOffset ?? 10;
+      onSeek(Math.min(duration, currentTime + offset));
+    });
+    safeSet('seekto', (details) => {
+      if (details.seekTime != null) onSeek(details.seekTime);
+    });
+
+    return () => {
+      // Cleanup — set all handlers to null
+      (['play','pause','previoustrack','nexttrack','stop','seekbackward','seekforward','seekto'] as MediaSessionAction[])
+        .forEach(a => { try { ms.setActionHandler(a, null); } catch { /* ignore */ } });
+    };
+  }, [currentTime, duration, onPlay, onPause, onNext, onPrev, onSeek, onStop]);
+}
+
 export default function App() {
   // ---------- Auth ----------
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('jms_token'));
@@ -661,6 +775,40 @@ export default function App() {
     pl.songIds.filter(id => allSongs.some(s => s.id === id)).length;
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  // ---------- Media Session (lock screen / Bluetooth / notification controls) ----------
+  useMediaSession({
+  currentTrack,
+  isPlaying,
+  currentTime,
+  duration,
+  coverUrl: currentTrack ? getCoverUrl(currentTrack) : GENERIC_COVERS[0],
+  onPlay: () => {
+    if (audioRef.current && !isPlaying) {
+      audioRef.current.play().then(() => setIsPlaying(true)).catch(err => console.error(err));
+    }
+  },
+  onPause: () => {
+    if (audioRef.current && isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    }
+  },
+  onNext: handleNext,
+  onPrev: handlePrev,
+  onSeek: (time) => {
+    if (audioRef.current) audioRef.current.currentTime = time;
+    setCurrentTime(time);
+  },
+  onStop: () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    setIsPlaying(false);
+    setCurrentTime(0);
+  },
+  });
 
   // =========================================================
   // THEME TOKENS
