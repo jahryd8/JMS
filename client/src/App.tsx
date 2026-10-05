@@ -83,6 +83,7 @@ const THEME_KEY = 'jms_theme';
 const LAST_PLAYED_KEY = 'jms_last_played';
 const DOWNLOADS_ORDER_KEY = 'jms_downloads_order';
 const RESUME_PLAYBACK_KEY = 'jms_resume_playback';
+const LAST_PLAYED_VERSION = 2;
 
 function toAbsoluteUrl(url: string | undefined): string | undefined {
   if (!url) return url;
@@ -522,7 +523,21 @@ export default function App() {
     const raw = localStorage.getItem(LAST_PLAYED_KEY);
     if (!raw) { setHasRestoredLastTrack(true); return; }
     try {
-      const snap = JSON.parse(raw) as { trackId: string; time: number; queue: string[]; index: number };
+      const snap = JSON.parse(raw) as {
+        v?: number;
+        trackId: string;
+        time: number;
+        queue: string[];
+        index: number;
+      };
+
+      // Discard snapshots from before this version
+      if (snap.v !== LAST_PLAYED_VERSION) {
+        localStorage.removeItem(LAST_PLAYED_KEY);
+        setHasRestoredLastTrack(true);
+        return;
+      }
+
       const track = allSongs.find(s => s.id === snap.trackId);
       if (!track) { setHasRestoredLastTrack(true); return; }
       const rebuiltQueue = (snap.queue || [])
@@ -534,7 +549,6 @@ export default function App() {
       setCurrentTrackIndex(finalIndex);
 
       // Read the CURRENT resume preference from localStorage
-      // (not from state — that may be stale when the effect runs)
       const shouldResume = localStorage.getItem(RESUME_PLAYBACK_KEY) === 'true';
       if (shouldResume) {
         setCurrentTime(snap.time || 0);
@@ -550,40 +564,91 @@ export default function App() {
 
   // ---------- React to resumePlayback toggle mid-session ----------
   useEffect(() => {
-    // Skip the very first run (mount) — nothing to react to yet
-    // and localStorage is already in sync
     if (!hasRestoredLastTrack) return;
 
     if (!resumePlayback) {
-      // Turning OFF: reset the current track to 0:00 if it's playing
+      // Turning OFF → drop current position, keep the track
       setCurrentTime(0);
       setPendingSeekTime(0);
       if (audioRef.current) {
         try { audioRef.current.currentTime = 0; } catch { /* ignore */ }
       }
+      // Also reset the saved snapshot's time to 0 so next boot starts fresh
+      if (currentTrack) {
+        try {
+          const raw = localStorage.getItem(LAST_PLAYED_KEY);
+          const existing = raw ? JSON.parse(raw) : {};
+          localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify({
+            ...existing,
+            v: LAST_PLAYED_VERSION,
+            trackId: currentTrack.id,
+            time: 0,
+            queue: playbackQueue.map(s => s.id),
+            index: currentTrackIndex,
+            savedAt: Date.now(),
+          }));
+        } catch { /* ignore */ }
+      }
     } else {
-      // Turning ON: if the current track matches what's saved, jump to that time
+      // Turning ON → if there's a saved position, jump to it
       try {
         const raw = localStorage.getItem(LAST_PLAYED_KEY);
         if (!raw) return;
-        const snap = JSON.parse(raw) as { trackId: string; time: number };
-        if (currentTrack?.id === snap.trackId && snap.time > 0) {
+        const snap = JSON.parse(raw) as {
+          v?: number;
+          trackId: string;
+          time: number;
+          index?: number;
+          queue?: string[];
+        };
+        if (!snap.trackId || !currentTrack) return;
+
+        if (currentTrack.id === snap.trackId && snap.time > 0) {
+          // Same track → seek to the saved position immediately
           setPendingSeekTime(snap.time);
+          setCurrentTime(snap.time);
           if (audioRef.current && audioRef.current.readyState >= 1) {
             try { audioRef.current.currentTime = snap.time; } catch { /* ignore */ }
-            setCurrentTime(snap.time);
           }
+        } else {
+          // Different track → save current as "last played" so next boot resumes it
+          try {
+            localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify({
+              v: LAST_PLAYED_VERSION,
+              trackId: currentTrack.id,
+              time: currentTime,
+              queue: playbackQueue.map(s => s.id),
+              index: currentTrackIndex,
+              savedAt: Date.now(),
+            }));
+          } catch { /* ignore */ }
         }
       } catch { /* ignore */ }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumePlayback]);
 
-  // ---------- Persist last-played (debounced) ----------
+  // ---------- Persist last-played: immediate on track change ----------
+  useEffect(() => {
+    if (!currentTrack) return;
+    const snapshot = {
+      v: LAST_PLAYED_VERSION,
+      trackId: currentTrack.id,
+      time: 0,
+      queue: playbackQueue.map(s => s.id),
+      index: currentTrackIndex,
+      savedAt: Date.now(),
+    };
+    try { localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(snapshot)); } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack?.id, currentTrackIndex]);
+
+  // ---------- Persist last-played: debounced time updates ----------
   useEffect(() => {
     if (!currentTrack) return;
     const handler = window.setTimeout(() => {
       const snapshot = {
+        v: LAST_PLAYED_VERSION,
         trackId: currentTrack.id,
         time: currentTime,
         queue: playbackQueue.map(s => s.id),
@@ -617,7 +682,6 @@ export default function App() {
         try { audio.currentTime = targetSeek; } catch { /* ignore */ }
       }
       audio.removeEventListener('loadedmetadata', restorePosition);
-      // Clear the pending seek so future plays start fresh
       setPendingSeekTime(null);
     };
     audio.addEventListener('loadedmetadata', restorePosition);
@@ -637,7 +701,7 @@ export default function App() {
     const targetIdx = targetList.findIndex(s => s.id === track.id);
     setCurrentTrackIndex(targetIdx !== -1 ? targetIdx : 0);
     setCurrentTime(0);
-    setPendingSeekTime(0);   // explicit fresh-start signal
+    setPendingSeekTime(0);
     setIsPlaying(true);
   };
 
