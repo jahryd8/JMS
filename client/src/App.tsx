@@ -515,7 +515,7 @@ export default function App() {
     if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
 
-  // ---------- Restore last-played (respects resumePlayback setting) ----------
+  // ---------- Restore last-played (runs once per boot) ----------
   useEffect(() => {
     if (hasRestoredLastTrack) return;
     if (allSongs.length === 0) return;
@@ -533,19 +533,51 @@ export default function App() {
       setPlaybackQueue(finalQueue);
       setCurrentTrackIndex(finalIndex);
 
-      if (resumePlayback) {
-        // Opted in: restore the saved timestamp
+      // Read the CURRENT resume preference from localStorage
+      // (not from state — that may be stale when the effect runs)
+      const shouldResume = localStorage.getItem(RESUME_PLAYBACK_KEY) === 'true';
+      if (shouldResume) {
         setCurrentTime(snap.time || 0);
         setPendingSeekTime(snap.time || 0);
       } else {
-        // Fresh start — reset to 0:00
         setCurrentTime(0);
         setPendingSeekTime(0);
       }
     } catch { /* ignore */ }
     setHasRestoredLastTrack(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSongs.length, hasRestoredLastTrack, resumePlayback]);
+  }, [allSongs.length, hasRestoredLastTrack]);
+
+  // ---------- React to resumePlayback toggle mid-session ----------
+  useEffect(() => {
+    // Skip the very first run (mount) — nothing to react to yet
+    // and localStorage is already in sync
+    if (!hasRestoredLastTrack) return;
+
+    if (!resumePlayback) {
+      // Turning OFF: reset the current track to 0:00 if it's playing
+      setCurrentTime(0);
+      setPendingSeekTime(0);
+      if (audioRef.current) {
+        try { audioRef.current.currentTime = 0; } catch { /* ignore */ }
+      }
+    } else {
+      // Turning ON: if the current track matches what's saved, jump to that time
+      try {
+        const raw = localStorage.getItem(LAST_PLAYED_KEY);
+        if (!raw) return;
+        const snap = JSON.parse(raw) as { trackId: string; time: number };
+        if (currentTrack?.id === snap.trackId && snap.time > 0) {
+          setPendingSeekTime(snap.time);
+          if (audioRef.current && audioRef.current.readyState >= 1) {
+            try { audioRef.current.currentTime = snap.time; } catch { /* ignore */ }
+            setCurrentTime(snap.time);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumePlayback]);
 
   // ---------- Persist last-played (debounced) ----------
   useEffect(() => {
@@ -1054,7 +1086,7 @@ export default function App() {
 
       {/* Resume playback toggle */}
       <div className={`px-3 pt-4 border-t ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-        <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+        <div className="flex items-center justify-between gap-3">
           <span className={`text-xs font-medium ${theme.textMuted}`}>
             Resume where I left off
           </span>
@@ -1063,7 +1095,7 @@ export default function App() {
             role="switch"
             aria-checked={resumePlayback}
             onClick={() => setResumePlayback(v => !v)}
-            className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
+            className={`relative w-9 h-5 rounded-full transition-colors shrink-0 cursor-pointer ${
               resumePlayback
                 ? (darkMode ? 'bg-blue-600' : 'bg-indigo-600')
                 : (darkMode ? 'bg-slate-700' : 'bg-slate-300')
@@ -1075,7 +1107,12 @@ export default function App() {
               }`}
             />
           </button>
-        </label>
+        </div>
+        <p className={`text-[10px] mt-2 leading-snug ${theme.textMuted}`}>
+          {resumePlayback
+            ? 'Songs will resume from where you paused when you reopen the app.'
+            : 'Every song starts from the beginning when you press play.'}
+        </p>
       </div>
 
       <button
