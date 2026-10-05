@@ -82,6 +82,7 @@ const DB_STORE = 'tracks';
 const THEME_KEY = 'jms_theme';
 const LAST_PLAYED_KEY = 'jms_last_played';
 const DOWNLOADS_ORDER_KEY = 'jms_downloads_order';
+const RESUME_PLAYBACK_KEY = 'jms_resume_playback';
 
 function toAbsoluteUrl(url: string | undefined): string | undefined {
   if (!url) return url;
@@ -134,7 +135,6 @@ async function removeDownload(id: string): Promise<void> {
   });
 }
 
-// Generic array move helper — used for playlist and downloads reordering
 function moveItemInArray<T>(arr: T[], fromIdx: number, toIdx: number): T[] {
   if (fromIdx === toIdx) return arr;
   if (fromIdx < 0 || fromIdx >= arr.length) return arr;
@@ -146,7 +146,7 @@ function moveItemInArray<T>(arr: T[], fromIdx: number, toIdx: number): T[] {
 }
 
 // ============================================================
-// useMediaSession — bridges HTML5 audio to the OS media UI
+// useMediaSession
 // ============================================================
 interface MediaSessionHandlers {
   currentTrack?: Song;
@@ -175,7 +175,6 @@ function useMediaSession({
   onSeek,
   onStop,
 }: MediaSessionHandlers) {
-  // Refs so action handlers can read the latest values without re-binding
   const currentTimeRef = useRef(currentTime);
   const durationRef = useRef(duration);
   const onSeekRef = useRef(onSeek);
@@ -184,7 +183,6 @@ function useMediaSession({
   useEffect(() => { durationRef.current = duration; }, [duration]);
   useEffect(() => { onSeekRef.current = onSeek; }, [onSeek]);
 
-  // Metadata
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     if (!currentTrack) {
@@ -211,18 +209,15 @@ function useMediaSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.id, coverUrl]);
 
-  // Playback state
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
   }, [isPlaying]);
 
-  // Position state — throttled to avoid thrashing the browser
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     if (!navigator.mediaSession.setPositionState) return;
     if (!duration || duration <= 0 || !isFinite(duration)) return;
-    // Only fire about once every 1 second
     const now = Math.floor(currentTime);
     const last = (useMediaSession as any)._lastSec ?? -1;
     if (now === last) return;
@@ -236,21 +231,17 @@ function useMediaSession({
     } catch { /* ignore */ }
   }, [currentTime, duration]);
 
-  // Action handlers — bind ONCE, read state from refs
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
-
     const safeSet = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
       try { ms.setActionHandler(action, handler); } catch { /* unsupported */ }
     };
-
     safeSet('play', () => onPlay());
     safeSet('pause', () => onPause());
     safeSet('previoustrack', () => onPrev());
     safeSet('nexttrack', () => onNext());
     safeSet('stop', () => onStop());
-
     safeSet('seekbackward', (details) => {
       const offset = details.seekOffset ?? 10;
       onSeekRef.current(Math.max(0, currentTimeRef.current - offset));
@@ -262,7 +253,6 @@ function useMediaSession({
     safeSet('seekto', (details) => {
       if (details.seekTime != null) onSeekRef.current(details.seekTime);
     });
-
     return () => {
       (['play','pause','previoustrack','nexttrack','stop','seekbackward','seekforward','seekto'] as MediaSessionAction[])
         .forEach(a => { try { ms.setActionHandler(a, null); } catch { /* ignore */ } });
@@ -291,6 +281,10 @@ export default function App() {
     if (saved === 'dark') return true;
     return true;
   });
+  const [resumePlayback, setResumePlayback] = useState<boolean>(() => {
+    return localStorage.getItem(RESUME_PLAYBACK_KEY) === 'true';
+  });
+  const [pendingSeekTime, setPendingSeekTime] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState('Discover');
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -342,6 +336,11 @@ export default function App() {
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', darkMode ? '#0f172a' : '#fafaf9');
   }, [darkMode]);
+
+  // Persist resume-playback preference
+  useEffect(() => {
+    localStorage.setItem(RESUME_PLAYBACK_KEY, resumePlayback ? 'true' : 'false');
+  }, [resumePlayback]);
 
   // Load downloads from IndexedDB, then sort by saved order
   useEffect(() => {
@@ -516,7 +515,7 @@ export default function App() {
     if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
 
-  // ---------- Restore last-played ----------
+  // ---------- Restore last-played (respects resumePlayback setting) ----------
   useEffect(() => {
     if (hasRestoredLastTrack) return;
     if (allSongs.length === 0) return;
@@ -533,11 +532,20 @@ export default function App() {
       const finalIndex = Math.max(0, finalQueue.findIndex(s => s.id === track.id));
       setPlaybackQueue(finalQueue);
       setCurrentTrackIndex(finalIndex);
-      setCurrentTime(snap.time || 0);
+
+      if (resumePlayback) {
+        // Opted in: restore the saved timestamp
+        setCurrentTime(snap.time || 0);
+        setPendingSeekTime(snap.time || 0);
+      } else {
+        // Fresh start — reset to 0:00
+        setCurrentTime(0);
+        setPendingSeekTime(0);
+      }
     } catch { /* ignore */ }
     setHasRestoredLastTrack(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allSongs.length, hasRestoredLastTrack]);
+  }, [allSongs.length, hasRestoredLastTrack, resumePlayback]);
 
   // ---------- Persist last-played (debounced) ----------
   useEffect(() => {
@@ -555,7 +563,7 @@ export default function App() {
     return () => window.clearTimeout(handler);
   }, [currentTrack?.id, currentTrackIndex, playbackQueue, currentTime]);
 
-  // ---------- Track loading ----------
+  // ---------- Track loading (uses pendingSeekTime for explicit seek intent) ----------
   useEffect(() => {
     if (!audioRef.current || !currentTrack) return;
     const localDownload = downloads.find(d => d.id === currentTrack.id);
@@ -570,12 +578,15 @@ export default function App() {
     }
 
     const audio = audioRef.current;
-    const seekTime = currentTime;
+    const targetSeek = pendingSeekTime ?? 0;
+
     const restorePosition = () => {
-      if (seekTime > 0 && Math.abs(audio.currentTime - seekTime) > 1) {
-        try { audio.currentTime = seekTime; } catch { /* ignore */ }
+      if (targetSeek > 0 && Math.abs(audio.currentTime - targetSeek) > 1) {
+        try { audio.currentTime = targetSeek; } catch { /* ignore */ }
       }
       audio.removeEventListener('loadedmetadata', restorePosition);
+      // Clear the pending seek so future plays start fresh
+      setPendingSeekTime(null);
     };
     audio.addEventListener('loadedmetadata', restorePosition);
     audio.src = url;
@@ -594,6 +605,7 @@ export default function App() {
     const targetIdx = targetList.findIndex(s => s.id === track.id);
     setCurrentTrackIndex(targetIdx !== -1 ? targetIdx : 0);
     setCurrentTime(0);
+    setPendingSeekTime(0);   // explicit fresh-start signal
     setIsPlaying(true);
   };
 
@@ -617,13 +629,17 @@ export default function App() {
     if (isShuffle) setCurrentTrackIndex(Math.floor(Math.random() * playbackQueue.length));
     else setCurrentTrackIndex(prev => (prev + 1) % playbackQueue.length);
     setCurrentTime(0);
+    setPendingSeekTime(0);
     setIsPlaying(true);
   }, [isRepeat, isShuffle, playbackQueue.length]);
 
   const handlePrev = () => {
     if (playbackQueue.length === 0) return;
     if (currentTime > 3 && audioRef.current) audioRef.current.currentTime = 0;
-    else setCurrentTrackIndex(prev => (prev - 1 + playbackQueue.length) % playbackQueue.length);
+    else {
+      setCurrentTrackIndex(prev => (prev - 1 + playbackQueue.length) % playbackQueue.length);
+      setPendingSeekTime(0);
+    }
     setIsPlaying(true);
   };
 
@@ -802,7 +818,6 @@ export default function App() {
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
-  // Whether reordering is available for the current view
   const canReorder =
     (activeTab === 'Downloads' && !searchQuery) ||
     (activeTab === 'PlaylistView' && activePlaylistId && activePlaylistId !== 'pl-fav' && !searchQuery);
@@ -1037,6 +1052,32 @@ export default function App() {
         </div>
       </div>
 
+      {/* Resume playback toggle */}
+      <div className={`px-3 pt-4 border-t ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
+        <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
+          <span className={`text-xs font-medium ${theme.textMuted}`}>
+            Resume where I left off
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={resumePlayback}
+            onClick={() => setResumePlayback(v => !v)}
+            className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
+              resumePlayback
+                ? (darkMode ? 'bg-blue-600' : 'bg-indigo-600')
+                : (darkMode ? 'bg-slate-700' : 'bg-slate-300')
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                resumePlayback ? 'translate-x-[18px]' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </label>
+      </div>
+
       <button
         onClick={handleLogout}
         className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
@@ -1100,7 +1141,7 @@ export default function App() {
   );
 
   // =========================================================
-  // TRACK ROW — includes reorder controls when in reorder mode
+  // TRACK ROW
   // =========================================================
   const renderTrackRow = (song: Song, idx: number) => {
     const isCurrent = currentTrack?.id === song.id;
@@ -1111,7 +1152,6 @@ export default function App() {
     const rowProgress = isCurrent ? progressPct : 0;
     const showDownloadBtnAlways = activeTab === 'Downloads';
 
-    // Reorder is enabled if the current view supports it AND reorder mode is on
     const reorderActive = canReorder && reorderMode;
 
     const handleUp = (e: React.MouseEvent) => {
@@ -1143,7 +1183,6 @@ export default function App() {
         )}
 
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-          {/* Reorder controls — shown on the left when in reorder mode */}
           {reorderActive && (
             <div className="flex flex-col shrink-0 -ml-1">
               <button
@@ -1193,7 +1232,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right-side actions — hidden in reorder mode except the up/down on mobile */}
         {!reorderActive && (
           <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0">
             <span className={`text-[10px] sm:text-xs hidden sm:inline ${theme.textMuted}`}>
@@ -1264,7 +1302,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Reorder-mode "done" indicator on the right — lets user know they're in reorder mode */}
         {reorderActive && (
           <div className={`text-[10px] font-mono font-bold px-2 py-1 rounded-lg ${
             darkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-600'
