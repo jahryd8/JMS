@@ -1,4 +1,9 @@
-import { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  ListObjectsV2Command,
+  GetObjectCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -22,6 +27,9 @@ const r2Client = new S3Client({
 const BUCKET = process.env.R2_BUCKET_NAME || '';
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'jms-sync-'));
 
+// ---------------------------------------------------------------
+// Filter out trash, hidden files, and non-MP3s
+// ---------------------------------------------------------------
 function isJunkKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (lower.includes('/.trash-')) return true;
@@ -32,6 +40,9 @@ function isJunkKey(key: string): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------
+// R2 helpers
+// ---------------------------------------------------------------
 async function fetchR2Object(key: string): Promise<Buffer> {
   const res = await r2Client.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
   if (!res.Body) throw new Error('Empty body for ' + key);
@@ -52,6 +63,9 @@ async function uploadCover(key: string, buffer: Buffer, contentType: string) {
   );
 }
 
+// ---------------------------------------------------------------
+// Filename fallback for untagged MP3s
+// ---------------------------------------------------------------
 function parseFilename(key: string) {
   const base = path.basename(key).replace(/\.[^/.]+$/, '');
   if (base.includes(' - ')) {
@@ -61,25 +75,55 @@ function parseFilename(key: string) {
   return { artist: 'Unknown Artist', title: base };
 }
 
+// ---------------------------------------------------------------
+// Main sync
+// ---------------------------------------------------------------
 async function syncR2ToDatabase() {
   console.log('[R2 Sync] Connecting to bucket:', BUCKET);
   console.log('[R2 Sync] Temp dir:', TMP_DIR);
 
   try {
+    // -----------------------------------------------------------
+    // 1. List everything under songs/ in R2
+    // -----------------------------------------------------------
     const command = new ListObjectsV2Command({ Bucket: BUCKET, Prefix: 'songs/' });
     const response = await r2Client.send(command);
     const allObjects = response.Contents || [];
 
-    const objects = allObjects.filter((obj) => obj.Key && !isJunkKey(obj.Key));
-    const skipped = allObjects.length - objects.length;
+    const validObjects = allObjects.filter((obj) => obj.Key && !isJunkKey(obj.Key));
+    const skippedJunk = allObjects.length - validObjects.length;
 
-    console.log(`[R2 Sync] Found ${allObjects.length} objects, ${objects.length} valid MP3s (${skipped} skipped)`);
+    console.log(
+      `[R2 Sync] Found ${allObjects.length} objects, ${validObjects.length} valid MP3s (${skippedJunk} junk skipped)`
+    );
 
+    // -----------------------------------------------------------
+    // 2. Load current DB state so we can skip and diff
+    // -----------------------------------------------------------
+    const dbSongs = await prisma.song.findMany({
+      select: { id: true, fileKey: true, coverKey: true },
+    });
+    const dbByKey = new Map(dbSongs.map((s) => [s.fileKey, s]));
+
+    // -----------------------------------------------------------
+    // 3. Determine which R2 keys are new vs. already indexed
+    // -----------------------------------------------------------
+    const r2Keys = new Set(validObjects.map((o) => o.Key!).filter(Boolean));
+    const newKeys = validObjects.filter((o) => o.Key && !dbByKey.has(o.Key));
+    const existingCount = validObjects.length - newKeys.length;
+
+    console.log(
+      `[R2 Sync] ${existingCount} songs already in DB, ${newKeys.length} new songs to process`
+    );
+
+    // -----------------------------------------------------------
+    // 4. Process new songs only
+    // -----------------------------------------------------------
     let syncCount = 0;
     let coverCount = 0;
     let errorCount = 0;
 
-    for (const obj of objects) {
+    for (const obj of newKeys) {
       if (!obj.Key) continue;
       const fileKey = obj.Key;
       const { artist: fallbackArtist, title: fallbackTitle } = parseFilename(fileKey);
@@ -90,16 +134,16 @@ async function syncR2ToDatabase() {
       let duration = 0;
       let coverKey: string | null = null;
 
-      // Temp file path — unique per iteration
-      const tmpFile = path.join(TMP_DIR, `${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+      const tmpFile = path.join(
+        TMP_DIR,
+        `${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`
+      );
 
       try {
         const buffer = await fetchR2Object(fileKey);
         fs.writeFileSync(tmpFile, buffer);
 
-        // parseFile sniffs the actual file bytes — no MIME hint needed
         const metadata = await parseFile(tmpFile, { duration: true });
-
         const common = metadata.common || {};
         const format = metadata.format || {};
 
@@ -113,7 +157,9 @@ async function syncR2ToDatabase() {
           const pic = pictures[0];
           const ext = pic.format.includes('png') ? 'png' : 'jpg';
           const contentType = pic.format || 'image/jpeg';
-          const coverObjectKey = `covers/${path.basename(fileKey).replace(/\.[^/.]+$/, '')}.${ext}`;
+          const coverObjectKey = `covers/${path
+            .basename(fileKey)
+            .replace(/\.[^/.]+$/, '')}.${ext}`;
 
           await uploadCover(coverObjectKey, Buffer.from(pic.data), contentType);
           coverKey = coverObjectKey;
@@ -123,7 +169,6 @@ async function syncR2ToDatabase() {
         console.warn(`[R2 Sync] Parse failed for ${fileKey}:`, (err as Error).message);
         errorCount++;
       } finally {
-        // Always clean up the temp file
         try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
       }
 
@@ -134,19 +179,39 @@ async function syncR2ToDatabase() {
       });
 
       syncCount++;
-
-      if (syncCount % 25 === 0) {
-        console.log(`[R2 Sync] Progress: ${syncCount}/${objects.length} (${coverCount} covers, ${errorCount} errors)`);
-      }
+      console.log(`[R2 Sync] + Added: ${artist} — ${title}`);
     }
 
-    console.log(
-      `[R2 Sync] Done. Indexed ${syncCount} songs, extracted ${coverCount} covers, ${errorCount} parse errors.`
-    );
+    // -----------------------------------------------------------
+    // 5. Remove orphans — DB rows whose R2 object is gone
+    // -----------------------------------------------------------
+    const orphans = dbSongs.filter((s) => !r2Keys.has(s.fileKey));
+
+    if (orphans.length > 0) {
+      console.log(`[R2 Sync] Removing ${orphans.length} orphaned rows (deleted from R2):`);
+      for (const o of orphans) {
+        console.log(`[R2 Sync] - Removing: ${o.fileKey}`);
+      }
+      await prisma.song.deleteMany({
+        where: { id: { in: orphans.map((o) => o.id) } },
+      });
+    }
+
+    // -----------------------------------------------------------
+    // 6. Summary
+    // -----------------------------------------------------------
+    console.log('');
+    console.log('════════════════════════════════════════════════');
+    console.log('[R2 Sync] Complete');
+    console.log(`[R2 Sync]   New songs added:   ${syncCount}`);
+    console.log(`[R2 Sync]   Covers extracted:  ${coverCount}`);
+    console.log(`[R2 Sync]   Orphans removed:   ${orphans.length}`);
+    console.log(`[R2 Sync]   Parse errors:      ${errorCount}`);
+    console.log(`[R2 Sync]   Unchanged (skipped): ${existingCount}`);
+    console.log('════════════════════════════════════════════════');
   } catch (error) {
     console.error('[R2 Sync] Fatal error:', error);
   } finally {
-    // Clean up temp dir
     try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     await prisma.$disconnect();
   }

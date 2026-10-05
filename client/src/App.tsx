@@ -81,6 +81,7 @@ const DB_NAME = 'jms_downloads';
 const DB_STORE = 'tracks';
 const THEME_KEY = 'jms_theme';
 const LAST_PLAYED_KEY = 'jms_last_played';
+const DOWNLOADS_ORDER_KEY = 'jms_downloads_order';
 
 function toAbsoluteUrl(url: string | undefined): string | undefined {
   if (!url) return url;
@@ -133,6 +134,17 @@ async function removeDownload(id: string): Promise<void> {
   });
 }
 
+// Generic array move helper — used for playlist and downloads reordering
+function moveItemInArray<T>(arr: T[], fromIdx: number, toIdx: number): T[] {
+  if (fromIdx === toIdx) return arr;
+  if (fromIdx < 0 || fromIdx >= arr.length) return arr;
+  if (toIdx < 0 || toIdx >= arr.length) return arr;
+  const next = [...arr];
+  const [moved] = next.splice(fromIdx, 1);
+  next.splice(toIdx, 0, moved);
+  return next;
+}
+
 // ============================================================
 // useMediaSession — bridges HTML5 audio to the OS media UI
 // ============================================================
@@ -163,7 +175,16 @@ function useMediaSession({
   onSeek,
   onStop,
 }: MediaSessionHandlers) {
-  // Metadata (title / artist / album / artwork)
+  // Refs so action handlers can read the latest values without re-binding
+  const currentTimeRef = useRef(currentTime);
+  const durationRef = useRef(duration);
+  const onSeekRef = useRef(onSeek);
+
+  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+  useEffect(() => { onSeekRef.current = onSeek; }, [onSeek]);
+
+  // Metadata
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     if (!currentTrack) {
@@ -190,61 +211,64 @@ function useMediaSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTrack?.id, coverUrl]);
 
-  // Playback state — drives the play/pause icon on lock screen
+  // Playback state
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
   }, [isPlaying]);
 
-  // Position state — drives the lock screen progress bar
+  // Position state — throttled to avoid thrashing the browser
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     if (!navigator.mediaSession.setPositionState) return;
     if (!duration || duration <= 0 || !isFinite(duration)) return;
+    // Only fire about once every 1 second
+    const now = Math.floor(currentTime);
+    const last = (useMediaSession as any)._lastSec ?? -1;
+    if (now === last) return;
+    (useMediaSession as any)._lastSec = now;
     try {
       navigator.mediaSession.setPositionState({
         duration,
         playbackRate: 1,
         position: Math.min(Math.max(0, currentTime), duration),
       });
-    } catch {
-      // Some browsers throw if position > duration; ignore
-    }
+    } catch { /* ignore */ }
   }, [currentTime, duration]);
 
-  // Action handlers — bind once, keep refs fresh via a stable effect
+  // Action handlers — bind ONCE, read state from refs
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
 
     const safeSet = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
-      try { ms.setActionHandler(action, handler); } catch { /* unsupported action */ }
+      try { ms.setActionHandler(action, handler); } catch { /* unsupported */ }
     };
 
-    safeSet('play', () => { onPlay(); });
-    safeSet('pause', () => { onPause(); });
-    safeSet('previoustrack', () => { onPrev(); });
-    safeSet('nexttrack', () => { onNext(); });
-    safeSet('stop', () => { onStop(); });
+    safeSet('play', () => onPlay());
+    safeSet('pause', () => onPause());
+    safeSet('previoustrack', () => onPrev());
+    safeSet('nexttrack', () => onNext());
+    safeSet('stop', () => onStop());
 
     safeSet('seekbackward', (details) => {
       const offset = details.seekOffset ?? 10;
-      onSeek(Math.max(0, currentTime - offset));
+      onSeekRef.current(Math.max(0, currentTimeRef.current - offset));
     });
     safeSet('seekforward', (details) => {
       const offset = details.seekOffset ?? 10;
-      onSeek(Math.min(duration, currentTime + offset));
+      onSeekRef.current(Math.min(durationRef.current, currentTimeRef.current + offset));
     });
     safeSet('seekto', (details) => {
-      if (details.seekTime != null) onSeek(details.seekTime);
+      if (details.seekTime != null) onSeekRef.current(details.seekTime);
     });
 
     return () => {
-      // Cleanup — set all handlers to null
       (['play','pause','previoustrack','nexttrack','stop','seekbackward','seekforward','seekto'] as MediaSessionAction[])
         .forEach(a => { try { ms.setActionHandler(a, null); } catch { /* ignore */ } });
     };
-  }, [currentTime, duration, onPlay, onPause, onNext, onPrev, onSeek, onStop]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onPlay, onPause, onNext, onPrev, onStop]);
 }
 
 export default function App() {
@@ -274,6 +298,7 @@ export default function App() {
   const [isMobilePlayerOpen, setIsMobilePlayerOpen] = useState(false);
   const [isMobilePlayerMenuOpen, setIsMobilePlayerMenuOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_BATCH);
+  const [reorderMode, setReorderMode] = useState(false);
 
   // ---------- Library / Player ----------
   const [allSongs, setAllSongs] = useState<Song[]>([]);
@@ -318,10 +343,34 @@ export default function App() {
     if (meta) meta.setAttribute('content', darkMode ? '#0f172a' : '#fafaf9');
   }, [darkMode]);
 
-  // Load downloads from IndexedDB
+  // Load downloads from IndexedDB, then sort by saved order
   useEffect(() => {
-    getAllDownloads().then(setDownloads).catch(err => console.error('DB load failed:', err));
+    getAllDownloads()
+      .then((items) => {
+        let ordered = items;
+        try {
+          const raw = localStorage.getItem(DOWNLOADS_ORDER_KEY);
+          if (raw) {
+            const order: string[] = JSON.parse(raw);
+            const pos = new Map(order.map((id, i) => [id, i]));
+            ordered = [...items].sort((a, b) => {
+              const ai = pos.has(a.id) ? pos.get(a.id)! : Infinity;
+              const bi = pos.has(b.id) ? pos.get(b.id)! : Infinity;
+              return ai - bi;
+            });
+          }
+        } catch { /* ignore */ }
+        setDownloads(ordered);
+      })
+      .catch(err => console.error('DB load failed:', err));
   }, []);
+
+  // Persist downloads order
+  useEffect(() => {
+    try {
+      localStorage.setItem(DOWNLOADS_ORDER_KEY, JSON.stringify(downloads.map(d => d.id)));
+    } catch { /* ignore */ }
+  }, [downloads]);
 
   // Online/offline
   useEffect(() => {
@@ -357,6 +406,7 @@ export default function App() {
 
   useEffect(() => {
     setVisibleCount(ITEMS_PER_BATCH);
+    setReorderMode(false);
   }, [activeTab, activePlaylistId, searchQuery]);
 
   useEffect(() => {
@@ -448,10 +498,7 @@ export default function App() {
         const data = await response.json();
         const incomingSongs: Song[] = data.songs || [];
         setAllSongs(incomingSongs);
-        // Don't overwrite the queue if we've restored a last-played session
-        if (!hasRestoredLastTrack) {
-          setPlaybackQueue(incomingSongs);
-        }
+        if (!hasRestoredLastTrack) setPlaybackQueue(incomingSongs);
       } else if (response.status === 401 || response.status === 403) {
         handleLogout();
       }
@@ -469,74 +516,50 @@ export default function App() {
     if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume;
   }, [volume, isMuted]);
 
-  // ---------- Restore last-played snapshot once library loads ----------
+  // ---------- Restore last-played ----------
   useEffect(() => {
     if (hasRestoredLastTrack) return;
     if (allSongs.length === 0) return;
-
     const raw = localStorage.getItem(LAST_PLAYED_KEY);
-    if (!raw) {
-      setHasRestoredLastTrack(true);
-      return;
-    }
-
+    if (!raw) { setHasRestoredLastTrack(true); return; }
     try {
-      const snap = JSON.parse(raw) as {
-        trackId: string;
-        time: number;
-        queue: string[];
-        index: number;
-      };
-
+      const snap = JSON.parse(raw) as { trackId: string; time: number; queue: string[]; index: number };
       const track = allSongs.find(s => s.id === snap.trackId);
-      if (!track) {
-        setHasRestoredLastTrack(true);
-        return;
-      }
-
-      // Rebuild the queue from saved ids; drop ids that no longer exist
+      if (!track) { setHasRestoredLastTrack(true); return; }
       const rebuiltQueue = (snap.queue || [])
         .map(id => allSongs.find(s => s.id === id))
         .filter((s): s is Song => !!s);
-
       const finalQueue = rebuiltQueue.length > 0 ? rebuiltQueue : [track];
       const finalIndex = Math.max(0, finalQueue.findIndex(s => s.id === track.id));
-
       setPlaybackQueue(finalQueue);
       setCurrentTrackIndex(finalIndex);
       setCurrentTime(snap.time || 0);
-      // Deliberately NOT calling setIsPlaying(true) — user resumes manually
-    } catch {
-      // ignore corrupt state
-    }
-
+    } catch { /* ignore */ }
     setHasRestoredLastTrack(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allSongs.length, hasRestoredLastTrack]);
 
-  // ---------- Persist last-played snapshot ----------
+  // ---------- Persist last-played (debounced) ----------
   useEffect(() => {
     if (!currentTrack) return;
-    const snapshot = {
-      trackId: currentTrack.id,
-      time: currentTime,
-      queue: playbackQueue.map(s => s.id),
-      index: currentTrackIndex,
-      savedAt: Date.now(),
-    };
-    try {
-      localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(snapshot));
-    } catch {
-      // quota exceeded — ignore
-    }
+    const handler = window.setTimeout(() => {
+      const snapshot = {
+        trackId: currentTrack.id,
+        time: currentTime,
+        queue: playbackQueue.map(s => s.id),
+        index: currentTrackIndex,
+        savedAt: Date.now(),
+      };
+      try { localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(snapshot)); } catch { /* ignore */ }
+    }, 5000);
+    return () => window.clearTimeout(handler);
   }, [currentTrack?.id, currentTrackIndex, playbackQueue, currentTime]);
 
-  // ---------- Track loading (offline-aware, restores saved position) ----------
+  // ---------- Track loading ----------
   useEffect(() => {
     if (!audioRef.current || !currentTrack) return;
     const localDownload = downloads.find(d => d.id === currentTrack.id);
     let url: string;
-
     if (localDownload) {
       url = URL.createObjectURL(localDownload.blob);
     } else if (!isOnline) {
@@ -548,7 +571,6 @@ export default function App() {
 
     const audio = audioRef.current;
     const seekTime = currentTime;
-
     const restorePosition = () => {
       if (seekTime > 0 && Math.abs(audio.currentTime - seekTime) > 1) {
         try { audio.currentTime = seekTime; } catch { /* ignore */ }
@@ -556,11 +578,9 @@ export default function App() {
       audio.removeEventListener('loadedmetadata', restorePosition);
     };
     audio.addEventListener('loadedmetadata', restorePosition);
-
     audio.src = url;
     audio.load();
     if (isPlaying) audio.play().catch(e => console.error('Playback error:', e));
-
     return () => {
       audio.removeEventListener('loadedmetadata', restorePosition);
       if (localDownload) URL.revokeObjectURL(url);
@@ -670,6 +690,16 @@ export default function App() {
     }
   };
 
+  const moveDownload = (songId: string, direction: 'up' | 'down', e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDownloads(prev => {
+      const idx = prev.findIndex(d => d.id === songId);
+      if (idx === -1) return prev;
+      const target = direction === 'up' ? idx - 1 : idx + 1;
+      return moveItemInArray(prev, idx, target);
+    });
+  };
+
   const formatTime = (secs: number) => {
     if (isNaN(secs) || secs <= 0) return '0:00';
     const m = Math.floor(secs / 60);
@@ -723,12 +753,8 @@ export default function App() {
       if (pl.id !== playlistId) return pl;
       const idx = pl.songIds.indexOf(songId);
       if (idx === -1) return pl;
-      const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (newIdx < 0 || newIdx >= pl.songIds.length) return pl;
-      const updatedIds = [...pl.songIds];
-      const [movedItem] = updatedIds.splice(idx, 1);
-      updatedIds.splice(newIdx, 0, movedItem);
-      return { ...pl, songIds: updatedIds };
+      const target = direction === 'up' ? idx - 1 : idx + 1;
+      return { ...pl, songIds: moveItemInArray(pl.songIds, idx, target) };
     }));
   };
 
@@ -776,38 +802,43 @@ export default function App() {
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
-  // ---------- Media Session (lock screen / Bluetooth / notification controls) ----------
+  // Whether reordering is available for the current view
+  const canReorder =
+    (activeTab === 'Downloads' && !searchQuery) ||
+    (activeTab === 'PlaylistView' && activePlaylistId && activePlaylistId !== 'pl-fav' && !searchQuery);
+
+  // ---------- Media Session ----------
   useMediaSession({
-  currentTrack,
-  isPlaying,
-  currentTime,
-  duration,
-  coverUrl: currentTrack ? getCoverUrl(currentTrack) : GENERIC_COVERS[0],
-  onPlay: () => {
-    if (audioRef.current && !isPlaying) {
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(err => console.error(err));
-    }
-  },
-  onPause: () => {
-    if (audioRef.current && isPlaying) {
-      audioRef.current.pause();
+    currentTrack,
+    isPlaying,
+    currentTime,
+    duration,
+    coverUrl: currentTrack ? getCoverUrl(currentTrack) : GENERIC_COVERS[0],
+    onPlay: () => {
+      if (audioRef.current && !isPlaying) {
+        audioRef.current.play().then(() => setIsPlaying(true)).catch(err => console.error(err));
+      }
+    },
+    onPause: () => {
+      if (audioRef.current && isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      }
+    },
+    onNext: handleNext,
+    onPrev: handlePrev,
+    onSeek: (time) => {
+      if (audioRef.current) audioRef.current.currentTime = time;
+      setCurrentTime(time);
+    },
+    onStop: () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
       setIsPlaying(false);
-    }
-  },
-  onNext: handleNext,
-  onPrev: handlePrev,
-  onSeek: (time) => {
-    if (audioRef.current) audioRef.current.currentTime = time;
-    setCurrentTime(time);
-  },
-  onStop: () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
-    setIsPlaying(false);
-    setCurrentTime(0);
-  },
+      setCurrentTime(0);
+    },
   });
 
   // =========================================================
@@ -1050,9 +1081,7 @@ export default function App() {
             className="group relative h-36 sm:h-44 rounded-2xl overflow-hidden shadow-lg hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-300 text-left border border-white/10"
           >
             <img
-              src={cat.image}
-              alt={cat.name}
-              loading="lazy"
+              src={cat.image} alt={cat.name} loading="lazy"
               className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-80 group-hover:scale-110 transition-all duration-700"
             />
             <div className={`absolute inset-0 bg-gradient-to-br ${cat.gradient} opacity-80 group-hover:opacity-70 transition-opacity duration-300`} />
@@ -1071,7 +1100,7 @@ export default function App() {
   );
 
   // =========================================================
-  // TRACK ROW
+  // TRACK ROW — includes reorder controls when in reorder mode
   // =========================================================
   const renderTrackRow = (song: Song, idx: number) => {
     const isCurrent = currentTrack?.id === song.id;
@@ -1080,15 +1109,27 @@ export default function App() {
     const downloaded = isDownloaded(song.id);
     const progress = downloadProgress[song.id];
     const rowProgress = isCurrent ? progressPct : 0;
-
-    // Show download/remove button on mobile ONLY in the Downloads tab
     const showDownloadBtnAlways = activeTab === 'Downloads';
+
+    // Reorder is enabled if the current view supports it AND reorder mode is on
+    const reorderActive = canReorder && reorderMode;
+
+    const handleUp = (e: React.MouseEvent) => {
+      if (activeTab === 'Downloads') moveDownload(song.id, 'up', e);
+      else if (activePlaylistId) moveTrackInPlaylist(activePlaylistId, song.id, 'up', e);
+    };
+    const handleDown = (e: React.MouseEvent) => {
+      if (activeTab === 'Downloads') moveDownload(song.id, 'down', e);
+      else if (activePlaylistId) moveTrackInPlaylist(activePlaylistId, song.id, 'down', e);
+    };
 
     return (
       <div
         key={song.id}
-        onClick={() => handlePlayTrack(song, fullFilteredSongs)}
-        className={`group relative flex items-center justify-between gap-2 p-2 sm:p-3.5 rounded-xl transition-all cursor-pointer border ${
+        onClick={() => { if (!reorderActive) handlePlayTrack(song, fullFilteredSongs); }}
+        className={`group relative flex items-center justify-between gap-2 p-2 sm:p-3.5 rounded-xl transition-all border ${
+          reorderActive ? 'cursor-default' : 'cursor-pointer'
+        } ${
           isCurrent
             ? (darkMode ? 'bg-blue-600/20 border-blue-500/40' : 'bg-indigo-100 border-indigo-300')
             : (darkMode ? 'hover:bg-slate-800/60 border-transparent' : 'hover:bg-white border-transparent hover:border-indigo-100')
@@ -1102,13 +1143,39 @@ export default function App() {
         )}
 
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+          {/* Reorder controls — shown on the left when in reorder mode */}
+          {reorderActive && (
+            <div className="flex flex-col shrink-0 -ml-1">
+              <button
+                onClick={handleUp}
+                disabled={idx === 0}
+                className={`p-1 rounded transition disabled:opacity-20 ${
+                  darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700' : 'text-slate-500 hover:text-indigo-600 hover:bg-slate-100'
+                }`}
+                title="Move up"
+              >
+                <ChevronUp className="w-4 h-4" />
+              </button>
+              <button
+                onClick={handleDown}
+                disabled={idx === visibleSongs.length - 1}
+                className={`p-1 rounded transition disabled:opacity-20 ${
+                  darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700' : 'text-slate-500 hover:text-indigo-600 hover:bg-slate-100'
+                }`}
+                title="Move down"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <div className="relative shrink-0">
             <img
               src={getCoverUrl(song)} alt={song.title}
               onError={(e) => { (e.target as HTMLImageElement).src = GENERIC_COVERS[0]; }}
               className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg object-cover bg-slate-800 shadow-sm"
             />
-            {isCurrent && isPlaying && (
+            {isCurrent && isPlaying && !reorderActive && (
               <div className="absolute inset-0 rounded-lg bg-black/40 flex items-center justify-center">
                 <Play className="w-4 h-4 text-white fill-white" />
               </div>
@@ -1126,86 +1193,85 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0">
-          <span className={`text-[10px] sm:text-xs hidden sm:inline ${theme.textMuted}`}>
-            {formatTime(song.duration)}
-          </span>
+        {/* Right-side actions — hidden in reorder mode except the up/down on mobile */}
+        {!reorderActive && (
+          <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0">
+            <span className={`text-[10px] sm:text-xs hidden sm:inline ${theme.textMuted}`}>
+              {formatTime(song.duration)}
+            </span>
 
-          {activeTab === 'PlaylistView' && activePlaylistId && (
-            <div className="hidden sm:flex items-center">
-              <button onClick={(e) => moveTrackInPlaylist(activePlaylistId, song.id, 'up', e)} disabled={idx === 0}
-                className={`p-1 rounded disabled:opacity-30 ${darkMode ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-indigo-600'}`}>
-                <ChevronUp className="w-3.5 h-3.5" />
+            {activeTab === 'PlaylistView' && activePlaylistId && activePlaylistId !== 'pl-fav' && (
+              <button onClick={(e) => removeFromActivePlaylist(song.id, e)}
+                className="p-1.5 rounded-full text-slate-400 hover:text-rose-500 transition"
+                title="Remove from playlist">
+                <Trash2 className="w-4 h-4" />
               </button>
-              <button onClick={(e) => moveTrackInPlaylist(activePlaylistId, song.id, 'down', e)} disabled={idx === visibleSongs.length - 1}
-                className={`p-1 rounded disabled:opacity-30 ${darkMode ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-indigo-600'}`}>
-                <ChevronDown className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
-          {activeTab === 'PlaylistView' && activePlaylistId && activePlaylistId !== 'pl-fav' && (
-            <button onClick={(e) => removeFromActivePlaylist(song.id, e)}
-              className="p-1.5 rounded-full text-slate-400 hover:text-rose-500 transition"
-              title="Remove from playlist">
-              <Trash2 className="w-4 h-4" />
-            </button>
-          )}
-
-          <button
-            onClick={(e) => downloaded ? removeDownloaded(song.id, e) : downloadTrack(song, e)}
-            disabled={progress !== undefined}
-            className={`p-1.5 rounded-full transition ${
-              showDownloadBtnAlways ? 'inline-flex' : 'hidden sm:inline-flex'
-            } ${
-              downloaded ? 'text-emerald-500 hover:text-rose-500'
-                : progress !== undefined ? 'text-blue-500 cursor-wait'
-                : 'text-slate-400 hover:text-blue-500'
-            }`}
-            title={downloaded ? 'Downloaded — click to remove' : progress !== undefined ? `Downloading ${progress}%` : 'Download for offline'}
-          >
-            {progress !== undefined ? (
-              <span className="text-[10px] font-bold tabular-nums w-4 text-center">{progress}</span>
-            ) : downloaded ? (<HardDriveDownload className="w-4 h-4" />) : (<DownloadCloud className="w-4 h-4" />)}
-          </button>
-
-          <button onClick={(e) => toggleFavorite(song.id, e)}
-            className={`p-1.5 rounded-full transition ${
-              isFav ? 'text-rose-500' : darkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-400 hover:text-rose-400'
-            }`}>
-            <Heart className={`w-4 h-4 ${isFav ? 'fill-rose-500' : ''}`} />
-          </button>
-
-          <div className="relative">
-            <button onClick={(e) => { e.stopPropagation(); setOpenDropdownSongId(isDropdownOpen ? null : song.id); }}
-              className={`p-1.5 rounded-full transition ${darkMode ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-indigo-600'}`}
-              title="Add to Playlist">
-              <Plus className="w-4 h-4" />
-            </button>
-            {isDropdownOpen && (
-              <div onClick={(e) => e.stopPropagation()}
-                className={`absolute right-0 top-full mt-2 w-48 rounded-xl shadow-2xl border z-[70] p-2 ${
-                  darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
-                }`}>
-                <p className={`px-2 py-1 text-[10px] font-bold tracking-widest uppercase ${theme.textMuted}`}>
-                  Add to Playlist
-                </p>
-                {playlists.map(pl => {
-                  const inPl = pl.songIds.includes(song.id);
-                  return (
-                    <button key={pl.id} onClick={(e) => toggleSongInPlaylist(pl.id, song.id, e)}
-                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-medium transition ${
-                        darkMode ? 'hover:bg-slate-800' : 'hover:bg-indigo-50'
-                      }`}>
-                      <span className="truncate">{pl.name}</span>
-                      {inPl && <Check className="w-3.5 h-3.5 text-indigo-500" />}
-                    </button>
-                  );
-                })}
-              </div>
             )}
+
+            <button
+              onClick={(e) => downloaded ? removeDownloaded(song.id, e) : downloadTrack(song, e)}
+              disabled={progress !== undefined}
+              className={`p-1.5 rounded-full transition ${
+                showDownloadBtnAlways ? 'inline-flex' : 'hidden sm:inline-flex'
+              } ${
+                downloaded ? 'text-emerald-500 hover:text-rose-500'
+                  : progress !== undefined ? 'text-blue-500 cursor-wait'
+                  : 'text-slate-400 hover:text-blue-500'
+              }`}
+              title={downloaded ? 'Downloaded — click to remove' : progress !== undefined ? `Downloading ${progress}%` : 'Download for offline'}
+            >
+              {progress !== undefined ? (
+                <span className="text-[10px] font-bold tabular-nums w-4 text-center">{progress}</span>
+              ) : downloaded ? (<HardDriveDownload className="w-4 h-4" />) : (<DownloadCloud className="w-4 h-4" />)}
+            </button>
+
+            <button onClick={(e) => toggleFavorite(song.id, e)}
+              className={`p-1.5 rounded-full transition ${
+                isFav ? 'text-rose-500' : darkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-400 hover:text-rose-400'
+              }`}>
+              <Heart className={`w-4 h-4 ${isFav ? 'fill-rose-500' : ''}`} />
+            </button>
+
+            <div className="relative">
+              <button onClick={(e) => { e.stopPropagation(); setOpenDropdownSongId(isDropdownOpen ? null : song.id); }}
+                className={`p-1.5 rounded-full transition ${darkMode ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-indigo-600'}`}
+                title="Add to Playlist">
+                <Plus className="w-4 h-4" />
+              </button>
+              {isDropdownOpen && (
+                <div onClick={(e) => e.stopPropagation()}
+                  className={`absolute right-0 top-full mt-2 w-48 rounded-xl shadow-2xl border z-[70] p-2 ${
+                    darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
+                  }`}>
+                  <p className={`px-2 py-1 text-[10px] font-bold tracking-widest uppercase ${theme.textMuted}`}>
+                    Add to Playlist
+                  </p>
+                  {playlists.map(pl => {
+                    const inPl = pl.songIds.includes(song.id);
+                    return (
+                      <button key={pl.id} onClick={(e) => toggleSongInPlaylist(pl.id, song.id, e)}
+                        className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-medium transition ${
+                          darkMode ? 'hover:bg-slate-800' : 'hover:bg-indigo-50'
+                        }`}>
+                        <span className="truncate">{pl.name}</span>
+                        {inPl && <Check className="w-3.5 h-3.5 text-indigo-500" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Reorder-mode "done" indicator on the right — lets user know they're in reorder mode */}
+        {reorderActive && (
+          <div className={`text-[10px] font-mono font-bold px-2 py-1 rounded-lg ${
+            darkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-600'
+          }`}>
+            {idx + 1}
+          </div>
+        )}
       </div>
     );
   };
@@ -1228,9 +1294,29 @@ export default function App() {
         </p>
       </div>
 
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-base sm:text-lg font-bold">{activePlaylist ? activePlaylist.name : activeTab}</h2>
-        <span className={`text-xs ${theme.textMuted}`}>{visibleSongs.length} / {fullFilteredSongs.length} tracks</span>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-base sm:text-lg font-bold truncate">
+          {activePlaylist ? activePlaylist.name : activeTab}
+        </h2>
+        <div className="flex items-center gap-3 shrink-0">
+          {canReorder && (
+            <button
+              onClick={() => setReorderMode(v => !v)}
+              className={`text-[11px] font-semibold px-3 py-1.5 rounded-lg transition ${
+                reorderMode
+                  ? (darkMode ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                              : 'bg-emerald-100 text-emerald-700 border border-emerald-300')
+                  : (darkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                              : 'bg-slate-200 text-slate-700 hover:bg-slate-300')
+              }`}
+            >
+              {reorderMode ? '✓ Done' : '↕ Reorder'}
+            </button>
+          )}
+          <span className={`text-xs ${theme.textMuted}`}>
+            {visibleSongs.length} / {fullFilteredSongs.length}
+          </span>
+        </div>
       </div>
 
       {isLoading ? (
@@ -1257,7 +1343,7 @@ export default function App() {
         </div>
       )}
 
-      {visibleCount < fullFilteredSongs.length && (
+      {visibleCount < fullFilteredSongs.length && !reorderMode && (
         <div className="mt-6 text-center">
           <button onClick={() => setVisibleCount(prev => prev + ITEMS_PER_BATCH)}
             className={`px-6 py-2.5 rounded-xl font-semibold text-xs transition shadow-md inline-flex items-center gap-2 ${
@@ -1286,7 +1372,7 @@ export default function App() {
           isMobilePlayerOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none'
         } ${darkMode ? 'bg-slate-950' : 'bg-white'}`}
         style={{
-          paddingTop: 'env(safe-area-inset-top)',
+          paddingTop: 'calc(env(safe-area-inset-top) + 0.5rem)',
           paddingBottom: 'env(safe-area-inset-bottom)',
         }}
       >
@@ -1483,8 +1569,11 @@ export default function App() {
         }
       `}</style>
 
-      {/* HEADER */}
-      <header className={`sticky top-0 z-30 px-3 sm:px-4 py-3 border-b backdrop-blur-md ${theme.header}`}>
+      {/* HEADER — safe-area aware */}
+      <header
+        className={`sticky top-0 z-30 px-3 sm:px-4 pb-3 border-b backdrop-blur-md ${theme.header}`}
+        style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
+      >
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
           <div className="flex items-center gap-2 sm:gap-3">
             <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -1535,11 +1624,14 @@ export default function App() {
         </div>
       </header>
 
-      {/* MOBILE DRAWER */}
+      {/* MOBILE DRAWER — safe-area aware */}
       {isMobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-40 animate-[fadeIn_0.2s_ease-out]">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsMobileMenuOpen(false)} />
-          <div className={`absolute left-0 top-0 bottom-0 w-72 p-5 overflow-y-auto transition-transform ${darkMode ? 'bg-slate-900' : 'bg-white'}`}>
+          <div
+            className={`absolute left-0 top-0 bottom-0 w-72 px-5 pb-5 overflow-y-auto transition-transform ${darkMode ? 'bg-slate-900' : 'bg-white'}`}
+            style={{ paddingTop: 'calc(1.25rem + env(safe-area-inset-top))' }}
+          >
             <div className="flex items-center justify-between mb-6">
               <span className="font-bold text-lg">Menu</span>
               <button onClick={() => setIsMobileMenuOpen(false)} className="p-1 rounded-md"><X className="w-5 h-5" /></button>
