@@ -17,5 +17,6 @@ export interface DownloadedTrack {
 
 export interface DownloadMeta {
   id: string;
+  song: Song;
   downloadedAt: number;
 }

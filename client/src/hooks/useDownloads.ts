@@ -78,7 +78,7 @@ export function useDownloads(authToken: string | null) {
       await saveDownload(track);
       setDownloadMeta(prev => [
         ...prev.filter(d => d.id !== song.id),
-        { id: song.id, downloadedAt: track.downloadedAt },
+        { id: song.id, song, downloadedAt: track.downloadedAt },
       ]);
     } catch (err) {
       console.error('Download failed:', err);

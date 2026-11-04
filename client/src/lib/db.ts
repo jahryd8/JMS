@@ -25,7 +25,12 @@ export async function saveDownload(track: DownloadedTrack): Promise<void> {
   });
 }
 
-/** Lightweight — only reads ids and timestamps, no blobs. Fast even with hundreds of downloads. */
+/**
+ * Returns download metadata WITHOUT the audio blobs — but WITH the song
+ * object (title, artist, cover, audioUrl, etc.). This means the Downloads
+ * tab can render and play offline even if the library fetch fails,
+ * because each row is self-sufficient.
+ */
 export async function getAllDownloadsMeta(): Promise<DownloadMeta[]> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -37,7 +42,7 @@ export async function getAllDownloadsMeta(): Promise<DownloadMeta[]> {
       const cursor = req.result;
       if (cursor) {
         const v = cursor.value as DownloadedTrack;
-        results.push({ id: v.id, downloadedAt: v.downloadedAt });
+        results.push({ id: v.id, song: v.song, downloadedAt: v.downloadedAt });
         cursor.continue();
       } else {
         resolve(results);

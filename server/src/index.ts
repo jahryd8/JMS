@@ -21,7 +21,8 @@ app.set('trust proxy', 1);
 
 app.use(cors({
   origin: [
-    'http://localhost:5173',
+    'http://localhost:5173',   // Vite dev server
+    'http://localhost:4173',   // Vite preview server
     'https://jms-ten-theta.vercel.app',   // no trailing slash
     /\.vercel\.app$/,                      // preview deploys
   ],

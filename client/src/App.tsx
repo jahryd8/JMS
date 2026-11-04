@@ -204,8 +204,13 @@ export default function App() {
   };
 
   // Library
-  const fetchLibrary = async () => {
+    const fetchLibrary = async () => {
     if (!authToken) return;
+    if (!navigator.onLine) {
+      console.log('[Library] Offline — skipping fetch');
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     const tryFetch = async (): Promise<Response | null> => {
       try {
@@ -412,12 +417,10 @@ export default function App() {
     player.handlePlayTrack(track, shuffled);
   };
 
-  const getDisplayedSongs = (): Song[] => {
+    const getDisplayedSongs = (): Song[] => {
     let baseList = player.allSongs;
     if (activeTab === 'Downloads') {
-      baseList = downloads.downloadMeta
-        .map(d => player.allSongs.find(s => s.id === d.id))
-        .filter((s): s is Song => !!s);
+      baseList = downloads.downloadMeta.map(d => d.song);
     } else if (activeTab === 'Favourites') {
       const favIds = favPlaylist?.songIds || [];
       baseList = player.allSongs.filter(s => favIds.includes(s.id));
